@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      Makes every app that has a launcher activity visible to us, which is the
+      documented alternative to requesting QUERY_ALL_PACKAGES.
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+
+        <!--
+          Icon packs advertise themselves through these legacy actions. Listing
+          them makes installed packs visible to us without QUERY_ALL_PACKAGES.
+        -->
+        <intent>
+            <action android:name="org.adw.launcher.THEMES" />
+        </intent>
+
+        <intent>
+            <action android:name="com.gau.go.launcherex.theme" />
+        </intent>
+
+        <intent>
+            <action android:name="com.novalauncher.THEME" />
+        </intent>
+
+        <intent>
+            <action android:name="com.anddoes.launcher.THEME" />
+        </intent>
+
+        <intent>
+            <action android:name="org.adw.launcher.icons" />
+        </intent>
+    </queries>
+
+    <!-- Lets us hand an uninstall request to the system package installer. -->
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+
+    <application
+        android:name=".LauncherApp"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.AndroidLauncher">
+
+        <activity
+            android:name=".MainActivity"
+            android:clearTaskOnLaunch="true"
+            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout|smallestScreenSize|uiMode|density|fontScale"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:stateNotNeeded="true"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+
+                <!--
+                  CATEGORY_HOME makes this a home app. CATEGORY_LAUNCHER is
+                  deliberately absent so the launcher does not list itself.
+                -->
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          The launcher's settings. Not exported and with no LAUNCHER category,
+          so it is reachable only from the launcher's home screen and the
+          launcher never lists itself in its own app drawer.
+        -->
+        <activity
+            android:name=".ui.settings.SettingsActivity"
+            android:exported="false"
+            android:icon="@drawable/ic_launcher_settings"
+            android:label="@string/settings_title"
+            android:theme="@style/Theme.AndroidLauncher.Settings"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!--
+          Used only for one global action: pulling the notification shade down
+          when the home screen is swiped. It reads no window content.
+        -->
+        <service
+            android:name=".service.NotificationShadeService"
+            android:exported="false"
+            android:label="@string/shade_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service" />
+        </service>
+    </application>
+
+</manifest>
