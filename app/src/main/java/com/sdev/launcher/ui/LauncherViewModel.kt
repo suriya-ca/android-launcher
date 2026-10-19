@@ -69,6 +69,14 @@ data class WidgetRequest(
     val provider: ComponentName,
     val spanX: Int,
     val spanY: Int,
+    /**
+     * The cell the user let the widget go on, when they carried it in from the
+     * widget page rather than tapping for it. Kept here because the answer to
+     * the system's question can take a while to come back, and by then the
+     * finger is long gone: without it the widget would land wherever it first
+     * fits instead of where it was aimed.
+     */
+    val near: Int? = null,
     val intent: Intent,
 )
 
@@ -464,7 +472,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun addToHome(app: AppInfo, preferred: Int? = null) =
         pin(app, HomeArea.HOME, preferred, R.string.home_full)
 
-    /** Pins an app to the dock, into [preferred] when that slot is free. */
+    /**
+     * Pins an app to the dock, into [preferred] when that slot is free.
+     */
     fun addToDock(app: AppInfo, preferred: Int? = null) =
         pin(app, HomeArea.DOCK, preferred, R.string.dock_full)
 
@@ -567,16 +577,51 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     // --- widgets -------------------------------------------------------------
 
-    /** Opens the picker, with the widgets that can go on the home screen. */
-    fun startPickingWidget() {
+    /**
+     * Opens the widget page, with the widgets that can go on the home screen.
+     *
+     * Reached both from the button in edit mode and from the pager on settling
+     * there, so a page asked for and a page swiped to come through the same
+     * door. Already being open is left alone, which is what keeps the previews
+     * from being bound a second time as the pager reports the page it has just
+     * arrived at.
+     */
+    fun openWidgetPage() {
+        if (_state.value.pickingWidget) return
+
         pickerGroups = groupWidgets(widgetHost.providers())
         _state.update { it.copy(pickingWidget = true, editing = false) }
     }
 
-    /** Closes the picker, handing back every id reserved for a preview. */
-    fun stopPickingWidget() {
+    /**
+     * Lets the widget page go, handing back the ids reserved for its previews.
+     *
+     * Called both when the page is closed and when it is left behind, so that a
+     * page swiped past does not go on holding the widgets it was drawing. The id
+     * of a widget that has just been taken is not among them: it was handed back
+     * when it was chosen, and the widget that landed on the home screen was bound
+     * from scratch under an id of its own.
+     */
+    fun closeWidgetPage() {
+        if (!_state.value.pickingWidget) return
+
         widgetHost.releasePreviews()
-        _state.update { it.copy(pickingWidget = false, editing = false) }
+        _state.update { it.copy(pickingWidget = false) }
+    }
+
+    /**
+     * Where the user has settled. The pager runs the pages, so the pager is what
+     * says which one is showing, and the rest of the launcher follows.
+     *
+     * The drawer is taken first: the two are set one after the other, and an
+     * instant with neither of them true is an instant with the home screen asked
+     * for, which on the way out of the widget page would send the pager off to
+     * the wrong end of the stack.
+     */
+    fun setShownPage(drawerOpen: Boolean, widgetPageOpen: Boolean) {
+        setDrawerOpen(drawerOpen)
+
+        if (widgetPageOpen) openWidgetPage() else closeWidgetPage()
     }
 
     /**
@@ -646,11 +691,15 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
      *
      * The previews were only ever for looking at: every id reserved for one goes
      * back, and the widget that lands is bound from scratch like any other. That
-     * keeps a preview's view from having to be moved out of the picker and into
-     * the home screen - a widget's view can only be in one place at a time, and
-     * the picker is still holding it while the home screen draws.
+     * keeps a preview's view from having to be moved out of the widget page and
+     * into the home screen - a widget's view can only be in one place at a time,
+     * and the page is still holding it while the home screen draws.
+     *
+     * [near] is the cell the user let the widget go on when they carried it in,
+     * and null when they tapped for it instead. Tapping leaves the widget to take
+     * the first place it fits; carrying it puts it where it was dropped.
      */
-    fun chooseWidget(choice: WidgetChoice) {
+    fun chooseWidget(choice: WidgetChoice, near: Int? = null) {
         widgetHost.releasePreviews()
 
         _state.update { it.copy(pickingWidget = false, editing = false) }
@@ -659,7 +708,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val hostId = widgetHost.allocateId()
 
         if (widgetHost.bind(hostId, provider)) {
-            placeWidget(hostId, provider, choice.spanX, choice.spanY)
+            placeWidget(hostId, provider, choice.spanX, choice.spanY, near)
             return
         }
 
@@ -670,6 +719,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     provider = provider,
                     spanX = choice.spanX,
                     spanY = choice.spanY,
+                    near = near,
                     intent = widgetHost.bindIntent(hostId, provider),
                 ),
             )
@@ -691,18 +741,47 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             return
         }
 
-        placeWidget(request.hostId, request.provider, request.spanX, request.spanY)
+        placeWidget(request.hostId, request.provider, request.spanX, request.spanY, request.near)
     }
 
-    /** Puts a bound widget on the home screen. */
-    private fun placeWidget(hostId: Int, provider: ComponentName, spanX: Int, spanY: Int) {
+    /**
+     * Puts a bound widget on the home screen, as near [near] as it fits.
+     *
+     * The cell the user aimed at is where it goes when there is room, and the
+     * nearest place on that same page that fits when there is not - a widget
+     * dropped on a page with a couple of icons on it should not be refused for
+     * the sake of the cell its corner happened to be over. Only when the page has
+     * no room at all does it fall back to wherever it will fit, which is where a
+     * tapped widget goes too.
+     */
+    private fun placeWidget(
+        hostId: Int,
+        provider: ComponentName,
+        spanX: Int,
+        spanY: Int,
+        near: Int? = null,
+    ) {
         viewModelScope.launch {
             val settings = _state.value.settings
+            val grid = settings.grid
+
+            val preferred = near?.let { anchor ->
+                findNearestWidgetCell(
+                    grid = grid,
+                    occupied = occupiedCells(settings),
+                    page = grid.pageOf(anchor),
+                    spanX = spanX,
+                    spanY = spanY,
+                    preferred = anchor,
+                )
+            }
+
             val cell = settingsRepository.addWidget(
                 hostId = hostId,
                 provider = provider.flattenToString(),
                 spanX = spanX,
                 spanY = spanY,
+                preferred = preferred,
                 pages = settings.homePages,
             )
 
@@ -722,9 +801,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             widgetHost.resize(hostId, spanX, spanY)
 
             _state.update {
-                it.copy(homePage = settings.grid.pageOf(cell), revealWidget = cell)
+                it.copy(homePage = grid.pageOf(cell), revealWidget = cell)
             }
         }
+    }
+
+    /** Every cell that may not be built on: the icons, and the room widgets take. */
+    private fun occupiedCells(settings: LauncherSettings): Set<Int> {
+        val grid = settings.grid
+        return settings.homeItems.keys +
+            settings.widgets.values.flatMap { it.cellsIn(grid) }
     }
 
     /** Moves a widget the user dragged to another cell. */

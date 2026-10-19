@@ -28,10 +28,14 @@
     <string name="edit_page_remove_message">Everything on it will be removed as well.</string>
     <string name="edit_page_remove_confirm">Remove</string>
     <string name="cancel">Cancel</string>
+    <string name="close">Close</string>
 
     <string name="home_full">The home screen is full</string>
     <string name="widget_picker_title">Widgets</string>
     <string name="widget_picker_empty">No widgets are available</string>
+    <string name="widget_no_results">No widgets match that search</string>
+    <string name="widget_page_hint">Hold a widget to drag it onto the home screen</string>
+    <string name="search_widgets_hint">Search widgets</string>
     <string name="widget_remove">Remove widget</string>
     <string name="widget_not_allowed">The system would not hand that widget over</string>
     <string name="widget_no_room">There is no room left for that widget</string>

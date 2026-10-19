@@ -14,8 +14,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -30,6 +28,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import kotlinx.coroutines.withTimeoutOrNull
+import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
@@ -38,8 +37,6 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.sdev.launcher.data.AppInfo
 import com.sdev.launcher.data.HomeArea
-import com.sdev.launcher.data.HomeGrid
-import com.sdev.launcher.data.LauncherSettings
 import com.sdev.launcher.data.WidgetPlacement
 import kotlin.math.roundToInt
 
@@ -74,9 +71,21 @@ class IconGestureHandlers(
     val onDrop: (DragState, Offset) -> Unit,
 )
 
-/** A widget being carried to another cell. */
+/**
+ * A widget in the air.
+ *
+ * It is either one that is already on the home screen - [from] says where - or
+ * one being brought in from the widget page, which has no place yet: until it is
+ * let go, all that is known is the room it needs and the entry it came from.
+ */
 data class WidgetDragState(
-    val placement: WidgetPlacement,
+    /** Where the widget sits, when it was picked up off the home screen. */
+    val from: WidgetPlacement? = null,
+    /** The picker entry it came from, when it is being brought in. */
+    val choice: WidgetChoice? = null,
+    /** How many cells of the grid it needs. */
+    val spanX: Int,
+    val spanY: Int,
     /** Finger position in root coordinates. */
     val position: Offset,
     /** Where in the widget the finger took hold of it. */
@@ -96,13 +105,23 @@ data class WidgetDragState(
 }
 
 /**
- * The one drag that is in flight, plus the home screen geometry needed to work
- * out where it would land.
+ * What to do with a widget that has been let go: the widget that was in the air,
+ * the corner it was being carried by, and where the finger was, all in root
+ * coordinates.
+ */
+typealias WidgetDropHandler = (WidgetDragState, Offset, Offset) -> Unit
+
+/**
+ * The one drag that is in flight.
  *
  * This lives above the pages rather than inside the home screen because a drag
  * has to survive the pages moving underneath it: an icon picked up in the
  * drawer is still being carried when the drawer slides away to reveal home.
- * The home screen keeps the geometry here up to date, in root coordinates.
+ *
+ * It deliberately holds no geometry. Where a drag would land is a question about
+ * the home screen as it is laid out at this instant, and the home screen answers
+ * it - see [HomeDropArea]. Anything cached here would be right until the page
+ * moved, and the page moving is the whole problem.
  */
 @Stable
 class IconDragController {
@@ -112,40 +131,6 @@ class IconDragController {
 
     var widgetDrag by mutableStateOf<WidgetDragState?>(null)
         private set
-
-    var gridOrigin by mutableStateOf(Offset.Zero)
-    var gridSize by mutableStateOf(Size.Zero)
-    var dockOrigin by mutableStateOf(Offset.Zero)
-    var dockSize by mutableStateOf(Size.Zero)
-
-    /**
-     * Which home screen page is showing while a drag is in flight. Cells are
-     * numbered across every page, so this is what turns a place on the visible
-     * grid into an index the rest of the launcher understands.
-     */
-    var homePage by mutableIntStateOf(0)
-
-    /**
-     * The shape of the home screen grid, kept up to date by the home screen
-     * because the user can change how many rows a page has.
-     */
-    var grid by mutableStateOf(HomeGrid(LauncherSettings.HOME_ROWS))
-
-    /**
-     * How much the home screen is drawn pulled back while it is being
-     * rearranged.
-     *
-     * The grid is laid out at its full size and only *drawn* smaller, so the size
-     * it reports when it is laid out is not the size a finger on the screen sees.
-     * This is what turns one into the other, and it is 1 the rest of the time.
-     */
-    var contentScale by mutableFloatStateOf(1f)
-
-    /** The grid as it is actually drawn, which is smaller while the home screen is. */
-    val shownGridSize: Size get() = gridSize * contentScale
-
-    /** The dock as it is actually drawn. */
-    val shownDockSize: Size get() = dockSize * contentScale
 
     /**
      * Where the page thumbnails are while a drag is in flight, in root
@@ -180,50 +165,6 @@ class IconDragController {
      */
     val moved: Boolean get() = drag?.moved == true || widgetDrag?.moved == true
 
-    /**
-     * The home cell under [position], if any.
-     *
-     * Everything here is in root coordinates and so is the geometry the home
-     * screen reports: a position read from a layout is already where it is drawn,
-     * pull-back and all, so only the size has to be brought down to match.
-     */
-    fun cellAt(position: Offset): Int? {
-        val columns = grid.columns
-        val rows = grid.rows
-        val shown = shownGridSize
-        val cellWidth = if (shown.width > 0f) shown.width / columns else 0f
-        val cellHeight = if (shown.height > 0f) shown.height / rows else 0f
-        if (cellWidth <= 0f || cellHeight <= 0f) return null
-
-        val x = position.x - gridOrigin.x
-        val y = position.y - gridOrigin.y
-        if (x < 0f || y < 0f || x >= shown.width || y >= shown.height) return null
-
-        val column = (x / cellWidth).toInt().coerceIn(0, columns - 1)
-        val row = (y / cellHeight).toInt().coerceIn(0, rows - 1)
-        return homePage * grid.cellCount + row * columns + column
-    }
-
-    /**
-     * The dock slot under [position], if any. The dock is put away while the
-     * home screen is being rearranged, so [enabled] is false then: a drop where
-     * the dock used to be must not think it landed in it.
-     */
-    fun dockSlotAt(position: Offset, enabled: Boolean = true): Int? {
-        if (!enabled) return null
-
-        val slots = LauncherSettings.DOCK_SLOTS
-        val shown = shownDockSize
-        val slotWidth = if (shown.width > 0f) shown.width / slots else 0f
-        if (slotWidth <= 0f || shown.height <= 0f) return null
-
-        val x = position.x - dockOrigin.x
-        val y = position.y - dockOrigin.y
-        if (x < 0f || y < 0f || x >= shown.width || y >= shown.height) return null
-
-        return (x / slotWidth).toInt().coerceIn(0, slots - 1)
-    }
-
     fun start(app: AppInfo, area: DragArea, index: Int, position: Offset) {
         drag = DragState(app, area, index, position)
     }
@@ -257,8 +198,30 @@ class IconDragController {
         }
     }
 
+    /** Picks up a widget that is already on the home screen. */
     fun startWidget(placement: WidgetPlacement, position: Offset, grab: Offset) {
-        widgetDrag = WidgetDragState(placement, position, grab)
+        widgetDrag = WidgetDragState(
+            from = placement,
+            spanX = placement.spanX,
+            spanY = placement.spanY,
+            position = position,
+            grab = grab,
+        )
+    }
+
+    /**
+     * Picks up a widget out of the widget page, which has no place on the grid
+     * yet: the room it needs comes from the entry it was taken from, and where
+     * it lands is not settled until it is let go.
+     */
+    fun startPendingWidget(choice: WidgetChoice, position: Offset, grab: Offset) {
+        widgetDrag = WidgetDragState(
+            choice = choice,
+            spanX = choice.spanX,
+            spanY = choice.spanY,
+            position = position,
+            grab = grab,
+        )
     }
 
     fun moveWidget(position: Offset) {
@@ -274,7 +237,12 @@ class IconDragController {
 
     /** Drops a widget drag that [cell] started, if it is the one in flight. */
     fun cancelWidgetIf(cell: Int) {
-        if (widgetDrag?.placement?.cell == cell) widgetDrag = null
+        if (widgetDrag?.from?.cell == cell) widgetDrag = null
+    }
+
+    /** Drops a widget drag that the picker entry [key] started, if it is the one in flight. */
+    fun cancelPendingWidgetIf(key: String) {
+        if (widgetDrag?.choice?.key == key) widgetDrag = null
     }
 }
 
@@ -311,14 +279,29 @@ fun dragTargetFor(
 }
 
 /**
+ * Where a place [local] within this layout is on the screen, as the layout is
+ * *now*.
+ *
+ * This is the live conversion, not a rect measured earlier: the parent pages
+ * slide about while something is being carried, and a position measured once
+ * would stay behind when they do. [localToRoot] walks the transforms at the
+ * moment it is asked, so a page that moved is accounted for even when no
+ * `onGloballyPositioned` ran in between.
+ */
+internal fun LayoutCoordinates?.rootOf(local: Offset): Offset? =
+    this?.takeIf { it.isAttached }?.localToRoot(local)
+
+/**
  * Tap, long press and drag for one icon, wherever it is.
  *
  * The long press is what separates the two kinds of press: letting go without
  * moving asks for the app's actions, and moving hands the icon over to
  * [controller] to be carried.
  *
- * The icon's position is asked for with [originAt] on every event rather than
- * measured once, because the page under the finger can slide away mid-drag.
+ * The finger is turned into a place on the screen through [coordinatesAt] on
+ * every event, so the position stays under the finger when the page it was
+ * picked up from slides away underneath it. [boundsAt] is only for the actions
+ * card, which sits where the icon is at the moment of the long press.
  */
 fun Modifier.iconGesture(
     app: AppInfo,
@@ -326,8 +309,14 @@ fun Modifier.iconGesture(
     index: Int,
     controller: IconDragController,
     handlers: IconGestureHandlers,
+    coordinatesAt: () -> LayoutCoordinates?,
     boundsAt: () -> Rect,
 ): Modifier = pointerInput(app.key, area, index) {
+    // The fallback keeps an icon that has just been detached (and so cannot be
+    // converted) from being dropped somewhere arbitrary.
+    fun at(local: Offset): Offset =
+        coordinatesAt().rootOf(local) ?: (boundsAt().topLeft + local)
+
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false)
         val longPress = awaitLongPressOrCancellation(down.id)
@@ -342,7 +331,7 @@ fun Modifier.iconGesture(
         }
 
         longPress.consume()
-        controller.start(app, area, index, boundsAt().topLeft + longPress.position)
+        controller.start(app, area, index, at(longPress.position))
 
         // The actions are asked for as soon as the press is long enough, the way
         // One UI shows them, rather than when the finger comes up.
@@ -375,7 +364,7 @@ fun Modifier.iconGesture(
                         handlers.onDragStart()
                     }
 
-                    controller.move(boundsAt().topLeft + change.position)
+                    controller.move(at(change.position))
                     change.consume()
                 }
             }
@@ -393,26 +382,28 @@ fun Modifier.iconGesture(
  * A tap is left alone so that the widget itself keeps working: only a long
  * press takes it over, and then it follows the finger from cell to cell.
  *
+ * The press has to be taken on the way *in*: a widget is a real Android view,
+ * and if it is handed the press first it will do whatever its provider asked
+ * for - which for most of them means opening the app. Nothing is consumed
+ * unless the press turns out to be a long one, so a tap still does what the
+ * widget is for.
+ *
  * [onDrop] is handed the widget, the top left corner it was let go at, and
  * where the finger was, all in root coordinates.
- */
-/**
- * Long-pressing a widget, which has to be done on the way *in*: a widget is a
- * real Android view, and if it is handed the press first it will do whatever
- * its provider asked for - which for most of them means opening the app.
- *
- * Nothing is consumed unless the press turns out to be a long one, so a tap on
- * a widget still does what the widget is for.
  */
 fun Modifier.widgetGesture(
     placement: WidgetPlacement,
     controller: IconDragController,
+    coordinatesAt: () -> LayoutCoordinates?,
     boundsAt: () -> Rect,
     onSelect: (WidgetPlacement) -> Unit,
     onDragStart: () -> Unit,
     onLongPress: (WidgetPlacement, Rect) -> Unit,
-    onDrop: (WidgetPlacement, Offset, Offset) -> Unit,
+    onDrop: WidgetDropHandler,
 ): Modifier = pointerInput(placement.hostId, placement.cell) {
+    fun at(local: Offset): Offset =
+        coordinatesAt().rootOf(local) ?: (boundsAt().topLeft + local)
+
     awaitEachGesture {
         val down = awaitFirstDown(
             requireUnconsumed = false,
@@ -451,10 +442,17 @@ fun Modifier.widgetGesture(
         if (strayed != null) return@awaitEachGesture
 
         // The finger keeps the grip it had, measured from the widget's corner.
+        // Both are read in the same space at the same moment, so the grip stays
+        // a vector even when the home screen is drawn pulled back.
+        val atDown = at(down.position)
+        // A widget only moves while the screen is at its normal size, so a rect
+        // measured earlier is the same corner when the conversion is not
+        // available.
+        val corner = coordinatesAt().rootOf(Offset.Zero) ?: boundsAt().topLeft
         controller.startWidget(
             placement = placement,
-            position = boundsAt().topLeft + down.position,
-            grab = down.position,
+            position = atDown,
+            grab = atDown - corner,
         )
         onSelect(placement)
 
@@ -468,11 +466,11 @@ fun Modifier.widgetGesture(
                 if (!change.pressed) {
                     controller.finishWidget()?.let { finished ->
                         if (moved) {
-                            onDrop(finished.placement, finished.anchor, finished.position)
+                            onDrop(finished, finished.anchor, finished.position)
                         } else {
                             // Held and let go in the same place: the widget is
                             // asking to be taken away.
-                            onLongPress(finished.placement, boundsAt())
+                            finished.from?.let { onLongPress(it, boundsAt()) }
                         }
                     }
                     break
@@ -484,7 +482,7 @@ fun Modifier.widgetGesture(
                     onDragStart()
                 }
 
-                if (moved) controller.moveWidget(boundsAt().topLeft + change.position)
+                if (moved) controller.moveWidget(at(change.position))
             }
         } finally {
             controller.cancelWidgetIf(placement.cell)
@@ -511,22 +509,31 @@ fun DraggableIcon(
     labelColor: Color? = null,
     labelShadow: Boolean = false,
 ) {
-    // Where this icon sits, in root coordinates. Kept up to date as its page
-    // moves, so the finger stays where the user put it, and so the card that
-    // hangs off a long press knows where to go.
+    // The icon's place, as a layout to convert through rather than as a rect
+    // copied out of one: the page it sits on slides away under the finger
+    // during a drag, and only the live conversion follows it. The rect is kept
+    // as well, because the actions card is put up where the icon is at the
+    // moment of the long press.
+    var coordinates by remember(app.key, area, index) {
+        mutableStateOf<LayoutCoordinates?>(null)
+    }
     var bounds by remember(app.key, area, index) { mutableStateOf(Rect.Zero) }
 
     AppIconTileContent(
         app = app,
         icon = icon,
         modifier = modifier
-            .onGloballyPositioned { bounds = it.boundsInRoot() }
+            .onGloballyPositioned {
+                coordinates = it
+                bounds = it.boundsInRoot()
+            }
             .iconGesture(
                 app = app,
                 area = area,
                 index = index,
                 controller = controller,
                 handlers = handlers,
+                coordinatesAt = { coordinates },
                 boundsAt = { bounds },
             ),
         iconSize = iconSize,
@@ -584,8 +591,8 @@ fun WidgetGhost(
     val density = LocalDensity.current
     if (cellSize.width <= 0f || cellSize.height <= 0f) return
 
-    val width = cellSize.width * drag.placement.spanX
-    val height = cellSize.height * drag.placement.spanY
+    val width = cellSize.width * drag.spanX
+    val height = cellSize.height * drag.spanY
     val outline = RoundedCornerShape(18.dp)
 
     Box(

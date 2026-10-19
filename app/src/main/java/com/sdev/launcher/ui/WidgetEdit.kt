@@ -82,30 +82,31 @@ private val EDGES = ResizeEdge.entries
 fun WidgetResizeOverlay(
     placement: WidgetPlacement,
     controller: IconDragController,
+    area: HomeDropArea,
     preview: WidgetPlacement?,
     fits: (Int, Int, Int) -> Boolean,
     onPreview: (WidgetPlacement?) -> Unit,
     onResize: (Int, Int, Int) -> Unit,
     onMoveStart: () -> Unit,
-    onDrop: (WidgetPlacement, Offset, Offset) -> Unit,
+    onDrop: WidgetDropHandler,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val gridOrigin = controller.gridOrigin
+    val gridOrigin = area.gridOrigin
     // The grid is drawn smaller than it is laid out while the home screen is
     // being rearranged, and these handles sit on the screen, so it is the drawn
     // size that matters here.
-    val gridSize = controller.shownGridSize
+    val gridSize = area.gridSize
     val density = LocalDensity.current
 
-    val columns = controller.grid.columns
-    val rows = controller.grid.rows
+    val columns = area.shape.columns
+    val rows = area.shape.rows
     val cellWidth = if (columns > 0) gridSize.width / columns else 0f
     val cellHeight = if (rows > 0) gridSize.height / rows else 0f
 
     /** Where a placement sits on the screen, in root coordinates. */
     fun rectOf(placed: WidgetPlacement): Rect {
-        val within = controller.grid.cellOf(placed.cell)
+        val within = area.shape.cellOf(placed.cell)
         val column = within % columns
         val row = within / columns
         return Rect(
@@ -222,7 +223,7 @@ fun WidgetResizeOverlay(
 
                         if (carried) {
                             controller.finishWidget()?.let { finished ->
-                                onDrop(finished.placement, finished.anchor, finished.position)
+                                onDrop(finished, finished.anchor, finished.position)
                             }
                         } else {
                             onDismiss()
@@ -247,7 +248,7 @@ fun WidgetResizeOverlay(
                         val across = ((at.x - finger.x) / cellWidth).roundToInt()
                         val downCells = ((at.y - finger.y) / cellHeight).roundToInt()
 
-                        target = place.resized(controller.grid, edge, across, downCells)
+                        target = place.resized(area.shape, edge, across, downCells)
                         onPreview(target)
                     }
 

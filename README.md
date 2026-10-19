@@ -6,20 +6,36 @@ Material 3.
 The app registers itself as a `CATEGORY_HOME` activity, so once it is set as the
 default home app it takes over the home screen.
 
+## Get it
+
+[**Download the latest APK**](https://github.com/suriya-ca/android-launcher/releases/latest)
+from GitHub Releases — the current release is **v0.2.0**.
+
+Install it, then make it the home app: **Settings → Apps → Default apps → Home
+app**, or use the launcher's own settings.
+
 ## Features
 
 **Home screen**
 - App grid with an editable number of rows per page
 - Multiple pages, with add / remove / reorder
 - A dock
-- Drag and drop to place, move, and remove apps
-- Widget hosting
+- Drag and drop that lands where you let go — every cell of every page, and the
+  dock, for apps and widgets alike
+- Widget hosting, including resize and move
 
 **App drawer**
 - Pages or list layout
 - Configurable grid columns, icon size, and app-name labels
 - A to Z or Z to A sort order
 - Optional search bar
+
+**Widget page**
+
+A third page, one swipe past the app drawer, that lists every widget the system
+offers, with search. Long-press one to carry it onto the home screen, or tap it
+to place it, and the widget page gives way to home in one step rather than sliding
+the drawer past on the way.
 
 **Appearance**
 - Light, dark, or system theme
@@ -65,8 +81,9 @@ The debug APK is written to `app/build/outputs/apk/debug/`.
 
 ## Testing
 
-The home screen's cell arithmetic is plain Kotlin and is covered by plain JUnit
-tests, so it runs on the JVM without a device:
+The home screen's cell arithmetic — which cell a place on the screen belongs to,
+on any page — is plain Kotlin and is covered by plain JUnit tests, so it runs on
+the JVM without a device:
 
 ```sh
 ./gradlew test

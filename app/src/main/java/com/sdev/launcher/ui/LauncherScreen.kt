@@ -41,6 +41,7 @@ import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -54,37 +55,33 @@ import kotlinx.coroutines.launch
 
 private const val HOME_PAGE = 0
 private const val DRAWER_PAGE = 1
-private const val PAGE_COUNT = 2
+private const val WIDGETS_PAGE = 2
+private const val PAGE_COUNT = 3
 
 /**
  * How far the user has to drag before the launcher moves to the neighbouring
  * page. The pager's default is half a page, which feels sluggish for a
  * launcher: a short swipe up opens the drawer and a short swipe down closes it
- * again. With only two pages a drag can only be aimed at the one available
- * neighbour, so no direction has to be worked out.
+ * again. A short flick is still only allowed to turn one page at a time, so the
+ * widget page, two pages away, is reached by swiping again rather than by one
+ * throw.
  */
 private const val SWIPE_THRESHOLD = 0.15f
 
 /**
- * How much of the top of the drawer is the target an icon is carried onto to
- * bring the home screen out. The whole band is the target - the pill drawn in
- * it is what says so - because a finger travelling up from the bottom of the
- * drawer needs somewhere to arrive at that is bigger than it looks.
- */
-private val DRAWER_PULL_ZONE = 132.dp
-
-/**
- * The launcher is two full pages stacked vertically:
+ * The launcher is three full pages stacked vertically:
  *
  *  - page 0 is the home screen: the wallpaper, plus pinned apps and a dock
  *  - page 1 is the app drawer
+ *  - page 2 is the widget page: every widget that can be put on the screen
  *
- * Swiping up moves from home to the drawer, swiping down moves back. Because
- * the drawer is a page rather than an overlay, it is always fullscreen.
+ * Swiping up moves from home to the drawer and on to the widgets, swiping down
+ * moves back. Because each is a page rather than an overlay, each is always
+ * fullscreen.
  *
- * An icon can also be picked up in the drawer and carried onto the home screen:
- * the drag is owned here rather than by either page, so that it survives the
- * page under the finger changing.
+ * An icon can also be picked up in the drawer, and a widget off the widget page,
+ * and carried onto the home screen: the drag is owned here rather than by either
+ * page, so that it survives the page under the finger changing.
  */
 @Composable
 fun LauncherScreen(
@@ -104,13 +101,17 @@ fun LauncherScreen(
     var removeZone by remember { mutableStateOf<Rect?>(null) }
     var uninstallZone by remember { mutableStateOf<Rect?>(null) }
 
-    // Where an icon out of the drawer has to be carried to bring the home
-    // screen out for it.
-    var pullZone by remember { mutableStateOf<Rect?>(null) }
-
     // The one drag in flight, shared by both pages.
     val dragController = remember { IconDragController() }
+
+    // Where the home screen is, and which cell a place on the screen belongs
+    // to. The home screen keeps it up to date as it is laid out and as its
+    // pages move; a drop asks it rather than doing the arithmetic itself, so
+    // there is only ever one answer to "which cell is here".
+    val dropArea = remember { HomeDropArea() }
     var dragLayerOrigin by remember { mutableStateOf(Offset.Zero) }
+
+    val band = with(LocalDensity.current) { DRAWER_PULL_ZONE.toPx() }
 
     // The system may insist on asking the user before this launcher is allowed
     // to show a widget; this is where that answer arrives.
@@ -153,13 +154,13 @@ fun LauncherScreen(
                 // page strip and the grid come after, so anything let go anywhere
                 // else lands as it always did.
                 val zone = dragTargetFor(drag.area, removeZone, uninstallZone, position)
-
-                // Let go on the Home target itself, with the home screen not out
-                // yet: nothing was aimed at, so nothing happens.
-                val retracted = drag.area == DragArea.DRAWER &&
-                    pullZone?.contains(position) == true
-
                 val page = dragController.dragPageAt(position)
+
+                // Read through the ViewModel rather than through the state this
+                // lambda was remembered with, so it always sees the settings as
+                // they are now.
+                val editing = viewModel.state.value.editing
+                val covered = viewModel.state.value.settings.widgetCells()
 
                 when {
                     zone == DragTarget.REMOVE -> {
@@ -174,34 +175,39 @@ fun LauncherScreen(
 
                     zone == DragTarget.UNINSTALL -> viewModel.uninstall(drag.app)
 
-                    retracted -> Unit
-
                     page != null -> viewModel.dropOnPage(drag, page)
 
                     else -> {
-                        // Read through the ViewModel rather than through the state
-                        // this lambda was remembered with, so it always sees the
-                        // settings as they are now.
-                        val covered = viewModel.state.value.settings.widgetCells()
-                        val slot = dragController.dockSlotAt(
-                            position,
-                            enabled = !viewModel.state.value.editing,
-                        )
-                        val cell = dragController.cellAt(position)
-                        val ontoWidget = cell != null && cell in covered
+                        val slot = dropArea.dockSlotAt(position, enabled = !editing)
+
+                        // Something carried in from another page is on its way
+                        // *onto* this one. Let go in the band above the grid -
+                        // the band is what brought the page out - it means the
+                        // top row, and lands there rather than nowhere. If the
+                        // page has not come out yet the grid is not under the
+                        // finger at all, so the band answers by column instead.
+                        //
+                        // Something being moved on the page is not carried in:
+                        // above the grid is nowhere, and it stays where it was.
+                        val incoming = drag.area == DragArea.DRAWER
+                        val cell = dropArea.cellAt(position, allowAbove = incoming)
+                            ?: if (incoming) dropArea.topRowAt(position, band) else null
 
                         when (drag.area) {
                             // Picked up in the drawer: a new pin, placed where it
                             // was let go.
                             DragArea.DRAWER -> when {
                                 slot != null -> viewModel.addToDock(drag.app, slot)
-                                cell != null && !ontoWidget -> viewModel.addToHome(drag.app, cell)
-                                // Let go inside the drawer, or on a widget:
-                                // nothing to pin.
+
+                                cell != null && cell !in covered ->
+                                    viewModel.addToHome(drag.app, cell)
+
+                                // Let go inside the drawer: nothing to pin.
                             }
 
                             // Already on the home screen: this is a move.
                             DragArea.HOME, DragArea.DOCK -> {
+                                val ontoWidget = cell != null && cell in covered
                                 val from = if (drag.area == DragArea.HOME) {
                                     HomeArea.HOME
                                 } else {
@@ -233,29 +239,53 @@ fun LauncherScreen(
         )
     }
 
-    // Preview widgets are bound to real ids while the picker is open, so they
-    // are handed back if the launcher's screen goes away with the picker still
-    // up: nothing would be left to close it, and those ids belong to the picker.
+    // Preview widgets are bound to real ids while the widget page is showing, so
+    // they are handed back if the launcher's screen goes away with that page
+    // still up: the page would not be there to be left, and so nothing would be
+    // left to hand them back, and those ids belong to the page.
     DisposableEffect(viewModel) {
         onDispose { viewModel.releaseWidgetPreviews() }
     }
 
-    // The ViewModel says which page *should* be showing (used by the Back key
-    // and the system Home action)...
-    LaunchedEffect(state.drawerOpen) {
-        val target = if (state.drawerOpen) DRAWER_PAGE else HOME_PAGE
-        if (pagerState.currentPage != target) pagerState.animateScrollToPage(target)
+    // The ViewModel says which page *should* be showing (used by the Back key,
+    // the widget button and the system Home action)...
+    val targetPage = when {
+        state.drawerOpen -> DRAWER_PAGE
+        state.pickingWidget -> WIDGETS_PAGE
+        else -> HOME_PAGE
     }
 
-    // ...and the pager reports back the page the user actually landed on.
+    LaunchedEffect(targetPage) {
+        if (pagerState.currentPage == targetPage) return@LaunchedEffect
+
+        // The drawer is one page from home and slides, which is how it has
+        // always felt. Anything further than that - the widget page, two away -
+        // arrives at once: sliding it would sweep the drawer past on the way,
+        // which reads as having gone somewhere rather than as having gone back.
+        val distance = pagerState.currentPage - targetPage
+        if (distance in -1..1) {
+            pagerState.animateScrollToPage(targetPage)
+        } else {
+            pagerState.scrollToPage(targetPage)
+        }
+    }
+
+    // ...and the pager reports back the page the user actually landed on, drawer
+    // and widget page together so that neither is ever briefly off on its own.
     LaunchedEffect(pagerState) {
         snapshotFlow { pagerState.settledPage }
             .distinctUntilChanged()
-            .collect { page -> viewModel.setDrawerOpen(page == DRAWER_PAGE) }
+            .collect { page ->
+                viewModel.setShownPage(
+                    drawerOpen = page == DRAWER_PAGE,
+                    widgetPageOpen = page == WIDGETS_PAGE,
+                )
+            }
     }
 
     BackHandler(
         enabled = state.drawerOpen ||
+            state.pickingWidget ||
             actionTarget != null ||
             widgetTarget != null ||
             state.selectedWidget != NO_WIDGET,
@@ -264,6 +294,9 @@ fun LauncherScreen(
             actionTarget != null -> actionTarget = null
             widgetTarget != null -> widgetTarget = null
             state.selectedWidget != NO_WIDGET -> viewModel.selectWidget(NO_WIDGET)
+            // Backing out of the widget page lands on the home screen, which is
+            // where a widget taken from it would have gone.
+            state.pickingWidget -> viewModel.closeWidgetPage()
             else -> viewModel.setDrawerOpen(false)
         }
     }
@@ -279,10 +312,30 @@ fun LauncherScreen(
     // screen is there, the whole grid - its first row included - is free to be
     // dropped on, and there is nothing up here left to aim at.
     val drag = dragController.drag
+    val widgetDrag = dragController.widgetDrag
+
+    // Something being carried from a page that is not the home screen: an icon
+    // out of the drawer, or a widget out of the widget page. Both are carried to
+    // the Home target along the top to bring the home screen out for them. A
+    // widget already on the home screen is not one of these - it has a place,
+    // and is being moved rather than brought in.
     val drawerCarry = drag?.takeIf { it.area == DragArea.DRAWER && it.moved }
+    val widgetCarry = widgetDrag?.takeIf { it.choice != null && it.moved }
+
+    val carriedToHome = drawerCarry?.position ?: widgetCarry?.position
+
     val homeArrived = pagerState.currentPage == HOME_PAGE && !pagerState.isScrollInProgress
-    val pullAt = drawerCarry?.takeIf { !state.editing && !homeArrived }
-    val pullingHome = pullAt != null && pullZone?.contains(pullAt.position) == true
+
+    // The band along the top of a page is what asks for the home screen, and it
+    // is a place rather than a composable's bounds: the pill drawn in it says
+    // where it is, but the test is the same one the drop makes, so the pull and
+    // the landing can never mean different things.
+    val pullingHome = carriedToHome != null &&
+        !state.editing &&
+        !homeArrived &&
+        carriedToHome.y <= band
+
+    val incoming = drawerCarry != null || widgetCarry != null
 
     // The pull is acted on in the screen's own scope rather than by the effect
     // that noticed it. The slide takes a moment, and the finger is free to leave
@@ -293,8 +346,17 @@ fun LauncherScreen(
     val pullScope = rememberCoroutineScope()
 
     LaunchedEffect(pullingHome) {
-        if (pullingHome && pagerState.currentPage != HOME_PAGE) {
-            pullScope.launch { pagerState.animateScrollToPage(HOME_PAGE) }
+        if (!pullingHome || pagerState.currentPage == HOME_PAGE) return@LaunchedEffect
+
+        pullScope.launch {
+            // The drawer is one page from home, so it slides the way it always
+            // has. The widget page is two away: sliding it would sweep the
+            // drawer past on the way, so the home screen is simply there.
+            if (drawerCarry != null) {
+                pagerState.animateScrollToPage(HOME_PAGE)
+            } else {
+                pagerState.scrollToPage(HOME_PAGE)
+            }
         }
     }
 
@@ -312,35 +374,71 @@ fun LauncherScreen(
     // page that does fit is where it goes, because letting go of a four by four
     // widget over a page that has a couple of icons on it would otherwise move it
     // nowhere at all.
-    val dropWidget: (WidgetPlacement, Offset, Offset) -> Unit = { placement, anchor, finger ->
-        if (removeZone?.contains(finger) == true) {
-            viewModel.removeWidget(placement.cell)
-        } else {
-            val page = dragController.dragPageAt(finger)
-            val near = if (page != null) {
-                state.settings.grid.firstCellOfPage(page)
-            } else {
-                // The corner the widget was shown at, or the finger when even
-                // that is off the grid - so a widget let go near the bottom of
-                // the screen still lands on the page it was over.
-                dragController.cellAt(anchor) ?: dragController.cellAt(finger)
-            }
+    //
+    // A widget carried in from the widget page has nothing to be moved from: it
+    // is being added, and the cell it was aimed at is the place it is asked for.
+    val dropWidget: WidgetDropHandler = { carried, anchor, finger ->
+        val from = carried.from
 
-            if (near != null) viewModel.moveWidgetNear(placement.cell, near)
+        when {
+            // Only a widget that is already on the screen has anything to be
+            // taken off it: one being brought in was never on it in the first
+            // place, so letting it go up here simply leaves it where it came
+            // from.
+            from != null && removeZone?.contains(finger) == true ->
+                viewModel.removeWidget(from.cell)
+
+            else -> {
+                // A page thumbnail under the finger is an explicit "that page,
+                // please", and wins over whatever grid happens to be showing.
+                val onPage = dragController.dragPageAt(finger)
+                    ?.let { state.settings.grid.firstCellOfPage(it) }
+
+                // Being brought in, the widget is on its way *onto* the page:
+                // in the band above the grid it means the top row, and while the
+                // page has not come out yet the band answers by column. Already
+                // on the page, it is a move, and above the grid is nowhere.
+                val incoming = from == null
+                val cell = if (incoming) {
+                    dropArea.cellAt(anchor, allowAbove = true)
+                        ?: dropArea.cellAt(finger, allowAbove = true)
+                        ?: dropArea.topRowAt(finger, band)
+                } else {
+                    dropArea.cellAt(anchor, allowAbove = false)
+                        ?: dropArea.cellAt(finger, allowAbove = false)
+                }
+
+                val near = onPage ?: cell
+
+                when {
+                    near == null -> Unit
+
+                    from != null -> viewModel.moveWidgetNear(from.cell, near)
+
+                    else -> carried.choice?.let { viewModel.chooseWidget(it, near) }
+                }
+            }
         }
     }
 
     Box(
         modifier = modifier
             .fillMaxSize()
-            .onGloballyPositioned { dragLayerOrigin = it.positionInRoot() },
+            .onGloballyPositioned {
+                dragLayerOrigin = it.positionInRoot()
+                // A finger's place is reported in the root's coordinates, so
+                // this is the space every other place has to be read against.
+                dropArea.root = it
+            },
     ) {
         VerticalPager(
             state = pagerState,
-            // Both pages stay composed: an icon can be dragged out of the page
-            // that is sliding away, and it has to keep being told where the
-            // finger is while that happens.
-            beyondViewportPageCount = 1,
+            // Every page stays composed: an icon can be dragged out of the page
+            // that is sliding away, a widget off the widget page two away, and
+            // the home screen has to keep being told where it is while that
+            // happens - it is the home screen that owns the geometry a drop is
+            // worked out from, and it cannot do that while it is not composed.
+            beyondViewportPageCount = 2,
             // Dragging an icon must not also drag the pager, and neither must
             // the home screen while it is being rearranged.
             userScrollEnabled = !dragController.active && !state.editing,
@@ -355,6 +453,7 @@ fun LauncherScreen(
                 HOME_PAGE -> HomeScreen(
                     state = state,
                     controller = dragController,
+                    dropArea = dropArea,
                     handlers = gestures,
                     widgetHost = viewModel.widgetHost,
                     active = pagerState.currentPage == HOME_PAGE,
@@ -381,12 +480,32 @@ fun LauncherScreen(
                     onRevealShown = viewModel::onRevealShown,
                 )
 
-                else -> AppDrawerPage(
+                DRAWER_PAGE -> AppDrawerPage(
                     state = state,
                     controller = dragController,
                     handlers = gestures,
                     isActive = pagerState.settledPage == DRAWER_PAGE,
                     onQueryChange = viewModel::onQueryChange,
+                )
+
+                else -> WidgetPage(
+                    groups = viewModel.widgetGroups(),
+                    host = viewModel.widgetHost,
+                    controller = dragController,
+                    // Taken from the ViewModel rather than from the page the
+                    // pager has settled on: the page is asked for before the
+                    // pager moves to it, and asking for it is what a fresh visit
+                    // is. Waiting for the pager to arrive would leave the last
+                    // visit's cards - and the ids they were drawn under, since
+                    // handed back - on the screen while it slid in.
+                    active = state.pickingWidget,
+                    onPick = { choice -> viewModel.chooseWidget(choice) },
+                    onDragStart = {
+                        actionTarget = null
+                        widgetTarget = null
+                    },
+                    onDrop = dropWidget,
+                    onDismiss = viewModel::closeWidgetPage,
                 )
             }
         }
@@ -433,7 +552,7 @@ fun LauncherScreen(
                 onRemovePage = viewModel::removeHomePage,
                 onMovePage = viewModel::moveHomePage,
                 onWallpaper = viewModel::openWallpaper,
-                onWidgets = viewModel::startPickingWidget,
+                onWidgets = viewModel::openWidgetPage,
                 onSettings = viewModel::openSettings,
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
@@ -450,6 +569,7 @@ fun LauncherScreen(
                 WidgetResizeOverlay(
                     placement = selected,
                     controller = dragController,
+                    area = dropArea,
                     preview = dragController.widgetPreview,
                     fits = { cell, spanX, spanY ->
                         state.settings.widgetFits(
@@ -479,16 +599,28 @@ fun LauncherScreen(
         // What is on offer along the top while something is in the air: the two
         // ways of getting rid of an icon that is already on the screen, or the
         // way onto the screen for one that is not.
-        val carried = drag?.position ?: dragController.widgetDrag?.position
+        val carried = drag?.position ?: widgetDrag?.position
         if (carried != null && dragController.moved && !state.editing) {
-            if (pullAt != null) {
-                DrawerPullTarget(
+            // Only something already pinned somewhere has anything to be taken
+            // off the screen or uninstalled. An icon out of the drawer and a
+            // widget out of the widget page are both on their way *to* the home
+            // screen and have neither, so no targets are offered for them: they
+            // could not be used, and drawing them over the grid the thing is
+            // about to land on invites a drop that does nothing.
+            val removable = when {
+                drag != null -> drag.area != DragArea.DRAWER
+                else -> widgetDrag?.from != null
+            }
+
+            when {
+                // Something being brought in from another page is offered the
+                // way onto the screen until the screen has arrived for it.
+                incoming && !homeArrived -> DrawerPullTarget(
                     hovered = pullingHome,
-                    onBounds = { pullZone = it },
                     modifier = Modifier.align(Alignment.TopCenter),
                 )
-            } else {
-                DragTargets(
+
+                removable -> DragTargets(
                     position = carried,
                     showUninstall = drag?.let {
                         it.app.componentName.packageName != context.packageName
@@ -502,7 +634,7 @@ fun LauncherScreen(
             }
         }
 
-        // Drawn last and above both pages, so the icon stays under the finger
+        // Drawn last and above every page, so the icon stays under the finger
         // wherever it came from.
         dragController.drag?.let { current ->
             DragOverlay(
@@ -517,8 +649,8 @@ fun LauncherScreen(
         // which it has by the time anything can be dragged - and the ghost is
         // drawn on the screen, so it takes the size the grid is drawn at.
         dragController.widgetDrag?.let { current ->
-            val grid = dragController.shownGridSize
-            val shape = dragController.grid
+            val grid = dropArea.gridSize
+            val shape = dropArea.shape
             WidgetGhost(
                 drag = current,
                 cellSize = Size(
@@ -602,15 +734,6 @@ fun LauncherScreen(
         )
     }
 
-    if (state.pickingWidget) {
-        WidgetPickerSheet(
-            groups = viewModel.widgetGroups(),
-            host = viewModel.widgetHost,
-            onPick = viewModel::chooseWidget,
-            onDismiss = viewModel::stopPickingWidget,
-        )
-    }
-
     widgetTarget?.let { target ->
         val placement = state.settings.widgets[target.cell]
 
@@ -639,29 +762,24 @@ fun LauncherScreen(
  * Holding the icon up here brings the home screen out from under the drawer; the
  * icon is then dropped on it like anything else. The whole band along the top is
  * live - the pill is what says the band is there - and the band is only up while
- * the drawer is the page showing.
+ * the home screen is still on its way.
  *
- * [onBounds] reports where the band ended up so that carrying the icon onto it
- * can be told apart from carrying it anywhere else, and is told nothing once it
- * goes away, so a drop lower down cannot be mistaken for this.
+ * It reports nothing about where it is: the band is a place along the top of the
+ * page, and the pull and the drop both test the same place. A composable that
+ * said where it was would be a second answer to that question, and a stale one
+ * as soon as it went away.
  */
 @Composable
 private fun DrawerPullTarget(
     hovered: Boolean,
-    onBounds: (Rect?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colours = MaterialTheme.colorScheme
 
-    DisposableEffect(Unit) {
-        onDispose { onBounds(null) }
-    }
-
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(DRAWER_PULL_ZONE)
-            .onGloballyPositioned { onBounds(it.boundsInRoot()) },
+            .height(DRAWER_PULL_ZONE),
         contentAlignment = Alignment.TopCenter,
     ) {
         Surface(

@@ -27,6 +27,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.annotation.StringRes
 import com.sdev.launcher.R
 
 /** Rounded search field with a hand-drawn magnifier and a clear button. */
@@ -35,6 +36,8 @@ fun LauncherSearchField(
     query: String,
     onQueryChange: (String) -> Unit,
     modifier: Modifier = Modifier,
+    /** What the field says while it is empty, so one field can serve several lists. */
+    @StringRes hint: Int = R.string.search_hint,
 ) {
     val colors = MaterialTheme.colorScheme
 
@@ -65,7 +68,7 @@ fun LauncherSearchField(
             decorationBox = { innerTextField ->
                 if (query.isEmpty()) {
                     Text(
-                        text = stringResource(R.string.search_hint),
+                        text = stringResource(hint),
                         style = MaterialTheme.typography.bodyLarge,
                         color = colors.onSurfaceVariant,
                     )

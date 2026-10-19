@@ -62,11 +62,17 @@
                 <action android:name="android.intent.action.MAIN" />
 
                 <!--
-                  CATEGORY_HOME makes this a home app. CATEGORY_LAUNCHER is
-                  deliberately absent so the launcher does not list itself.
+                  CATEGORY_HOME makes this a home app. CATEGORY_LAUNCHER is here
+                  as well, so that the launcher can be found and started from the
+                  phone's own launcher: Nothing OS, One UI and the rest list an
+                  app by that category, and without it a home app that is not the
+                  one in charge can be reached only through the system settings.
+                  The launcher still keeps itself out of its own app drawer - it
+                  is AppRepository that leaves its own package off the list.
                 -->
                 <category android:name="android.intent.category.HOME" />
                 <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
 

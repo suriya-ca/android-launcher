@@ -104,9 +104,10 @@ private const val SHADE_SWIPE_TIMEOUT_MS = 500L
  * letting go offers that app's actions, and a swipe down asks for the
  * notification shade.
  *
- * Where the cells are is published to [controller] as it is laid out: the drag
- * that places an icon is decided above this screen, because it outlives the
- * page.
+ * Where the cells are is published to [dropArea] as it is laid out, and the
+ * cells a drag would land in are asked of it: the drag that places an icon is
+ * decided above this screen, because it outlives the page, and it has to be
+ * answered from the page as it is drawn right now.
  *
  * The home screen can be several pages wide. [page] is the one to show, and
  * [onPageChange] reports back the one the user turned to.
@@ -115,6 +116,7 @@ private const val SHADE_SWIPE_TIMEOUT_MS = 500L
 fun HomeScreen(
     state: LauncherUiState,
     controller: IconDragController,
+    dropArea: HomeDropArea,
     handlers: IconGestureHandlers,
     widgetHost: WidgetHost,
     /** True while this page is the one being looked at. */
@@ -126,7 +128,7 @@ fun HomeScreen(
     onWidgetLongPress: (WidgetPlacement, Rect) -> Unit,
     onWidgetSelect: (Int) -> Unit,
     onDragStart: () -> Unit,
-    onWidgetDrop: (WidgetPlacement, Offset, Offset) -> Unit,
+    onWidgetDrop: WidgetDropHandler,
     onWidgetRevealShown: () -> Unit,
     onSwipeDown: () -> Unit,
     onRevealShown: () -> Unit,
@@ -166,24 +168,35 @@ fun HomeScreen(
             .collect(onPageChange)
     }
 
-    // A separate collector for the page being turned to, so the drag geometry
-    // follows the page while it is moving rather than once it has settled.
-    LaunchedEffect(pagePagerState, controller) {
+    // A separate collector for the page being turned to, so a drop counts
+    // against the page coming in rather than the one it is leaving.
+    LaunchedEffect(pagePagerState, dropArea) {
         snapshotFlow { pagePagerState.currentPage }
             .distinctUntilChanged()
-            .collect { controller.homePage = it }
+            .collect { dropArea.page = it }
     }
 
     val drag = controller.drag
     val widgetDrag = controller.widgetDrag
     val moved = controller.moved
+
+    // The band along the top that brings the home screen out of another page.
+    val band = with(density) { DRAWER_PULL_ZONE.toPx() }
+
     val dropSlot = if (moved) {
-        drag?.let { controller.dockSlotAt(it.position, enabled = !editing) }
+        drag?.let { dropArea.dockSlotAt(it.position, enabled = !editing) }
     } else {
         null
     }
     val dropCell = if (drag != null && moved && dropSlot == null) {
-        controller.cellAt(drag.position)
+        // An icon out of the drawer is on its way onto this page, and over the
+        // band above the grid the top row is what the finger is over: that is
+        // the cell marked out, and the cell it lands in. While the page is still
+        // arriving the band answers by column instead, exactly as the drop
+        // does - so the mark and the landing cannot disagree.
+        val incoming = drag.area == DragArea.DRAWER
+        dropArea.cellAt(drag.position, allowAbove = incoming)
+            ?: if (incoming) dropArea.topRowAt(drag.position, band) else null
     } else {
         null
     }
@@ -194,9 +207,20 @@ fun HomeScreen(
     // will use, so the hint cannot disagree with where the widget lands.
     val widgetDrop = if (moved) {
         widgetDrag?.let { current ->
+            // A widget being brought in is aimed at the top row when it is over
+            // the band above the grid, exactly as the drop itself reads it.
+            val incoming = current.from == null
+            val anchor = dropArea.cellAt(current.anchor, allowAbove = incoming)
+                ?: dropArea.cellAt(current.position, allowAbove = incoming)
+                ?: if (incoming) dropArea.topRowAt(current.position, band) else null
+
             widgetDropTarget(
-                placement = current.placement,
-                anchor = controller.cellAt(current.anchor),
+                spanX = current.spanX,
+                spanY = current.spanY,
+                // A widget being carried does not count as being in its own
+                // way, so the room it is leaving is free for it to land in.
+                ignoring = current.from?.cell,
+                anchor = anchor,
                 settings = settings,
             )
         }
@@ -238,24 +262,25 @@ fun HomeScreen(
 
     /** True when [position] is a cell that holds nothing and has no widget on it. */
     fun isEmptyCell(position: Offset): Boolean {
-        val cell = controller.cellAt(position)
+        // Not the band: this is about a press on the page as it is, and the
+        // space above the grid is not a cell of it.
+        val cell = dropArea.cellAt(position, allowAbove = false)
         if (cell != null) {
             return cell !in state.homeApps && cell !in state.settings.widgetCells()
         }
 
-        val slot = controller.dockSlotAt(position, enabled = !editing)
+        val slot = dropArea.dockSlotAt(position, enabled = !editing)
         if (slot != null) return slot !in state.dockApps
 
         return true
     }
 
-    // The drag code works out where a finger is from the grid it can see, and
-    // the grid is only *drawn* pulled back while it is being rearranged: the
-    // layout stays at its full size. Told by how much, it can bring the size it
-    // reads off the layout down to the size on the screen.
+    // How many cells a page has, and how far it is drawn pulled back: the first
+    // for anything working out a cell, the second for overlays that have to be
+    // sized like the thing they are drawn over.
     SideEffect {
-        controller.contentScale = editScale
-        controller.grid = settings.grid
+        dropArea.shape = settings.grid
+        dropArea.scale = editScale
     }
 
     Box(
@@ -332,8 +357,14 @@ fun HomeScreen(
                     .fillMaxWidth()
                     .weight(1f)
                     .onGloballyPositioned { coordinates ->
-                        controller.gridOrigin = coordinates.positionInRoot()
-                        controller.gridSize = coordinates.size.toSize()
+                        // The layout itself, so that a place on the screen can
+                        // be turned into a cell through the transforms Compose
+                        // applied - the page this grid sits on included.
+                        dropArea.grid = coordinates
+                        dropArea.gridRect = Rect(
+                            coordinates.positionInRoot(),
+                            coordinates.size.toSize(),
+                        )
                     },
             ) {
                 val cellWidth = maxWidth / settings.grid.columns.toFloat()
@@ -426,9 +457,8 @@ fun HomeScreen(
                     reveal = state.revealCell,
                     active = active,
                     onRevealShown = onRevealShown,
-                    onBounds = { origin, size ->
-                        controller.dockOrigin = origin
-                        controller.dockSize = size
+                    onBounds = { coordinates ->
+                        dropArea.dock = coordinates
                     },
                 )
             }
@@ -492,7 +522,9 @@ private data class WidgetDropTarget(val cells: Set<Int>, val allowed: Boolean)
  * Nothing is marked out when the finger is not over the grid at all.
  */
 private fun widgetDropTarget(
-    placement: WidgetPlacement,
+    spanX: Int,
+    spanY: Int,
+    ignoring: Int?,
     anchor: Int?,
     settings: LauncherSettings,
 ): WidgetDropTarget? {
@@ -501,23 +533,23 @@ private fun widgetDropTarget(
     val grid = settings.grid
     val occupied = settings.homeItems.keys +
         settings.widgets.values
-            .filter { it.cell != placement.cell }
+            .filter { it.cell != ignoring }
             .flatMap { it.cellsIn(grid) }
 
     val cell = findNearestWidgetCell(
         grid = grid,
         occupied = occupied,
         page = grid.pageOf(anchor),
-        spanX = placement.spanX,
-        spanY = placement.spanY,
+        spanX = spanX,
+        spanY = spanY,
         preferred = anchor,
     ) ?: return WidgetDropTarget(
-        cells = widgetCells(grid, anchor, placement.spanX, placement.spanY),
+        cells = widgetCells(grid, anchor, spanX, spanY),
         allowed = false,
     )
 
     return WidgetDropTarget(
-        cells = widgetCells(grid, cell, placement.spanX, placement.spanY),
+        cells = widgetCells(grid, cell, spanX, spanY),
         allowed = true,
     )
 }
@@ -585,7 +617,7 @@ private fun HomeDock(
     reveal: Pair<HomeArea, Int>?,
     active: Boolean,
     onRevealShown: () -> Unit,
-    onBounds: (Offset, Size) -> Unit,
+    onBounds: (LayoutCoordinates) -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -596,7 +628,7 @@ private fun HomeDock(
             .padding(horizontal = 4.dp, vertical = 8.dp)
             // Measured last so the bounds describe the slots, not the padding
             // around them.
-            .onGloballyPositioned { onBounds(it.positionInRoot(), it.size.toSize()) },
+            .onGloballyPositioned { onBounds(it) },
         verticalAlignment = Alignment.CenterVertically,
     ) {
         repeat(LauncherSettings.DOCK_SLOTS) { index ->
@@ -637,7 +669,7 @@ private fun WidgetLayer(
     onLongPress: (WidgetPlacement, Rect) -> Unit,
     onSelect: (Int) -> Unit,
     onDragStart: () -> Unit,
-    onDrop: (WidgetPlacement, Offset, Offset) -> Unit,
+    onDrop: WidgetDropHandler,
     revealed: Boolean,
     onRevealShown: () -> Unit,
 ) {
@@ -649,6 +681,9 @@ private fun WidgetLayer(
         // Keyed by the widget rather than by its cell, so moving it only moves
         // the view it already has.
         key(placement.hostId) {
+            var coordinates by remember(placement.hostId) {
+                mutableStateOf<LayoutCoordinates?>(null)
+            }
             var bounds by remember(placement.hostId) { mutableStateOf(Rect.Zero) }
 
             // Where the widget would sit while a corner is being dragged out,
@@ -661,7 +696,7 @@ private fun WidgetLayer(
             val within = grid.cellOf(shown.cell)
             val column = within % grid.columns
             val row = within / grid.columns
-            val held = controller.widgetDrag?.placement?.cell == placement.cell
+            val held = controller.widgetDrag?.from?.cell == placement.cell
             val flashing = revealed && state.revealWidget == placement.cell
 
             Box(
@@ -672,10 +707,14 @@ private fun WidgetLayer(
                         height = cellHeight * shown.spanY,
                     )
                     .alpha(if (held) 0.4f else 1f)
-                    .onGloballyPositioned { bounds = it.boundsInRoot() }
+                    .onGloballyPositioned {
+                        coordinates = it
+                        bounds = it.boundsInRoot()
+                    }
                     .widgetGesture(
                         placement = placement,
                         controller = controller,
+                        coordinatesAt = { coordinates },
                         boundsAt = { bounds },
                         onSelect = { onSelect(it.cell) },
                         onDragStart = onDragStart,

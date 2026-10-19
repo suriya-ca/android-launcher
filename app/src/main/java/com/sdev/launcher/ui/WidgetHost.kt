@@ -48,13 +48,13 @@ class WidgetHost(private val context: Context) {
     private val views = HashMap<Int, AppWidgetHostView>()
 
     /**
-     * The ids reserved for widgets being drawn in the picker, by the key of the
-     * entry they belong to.
+     * The ids reserved for widgets being drawn on the widget page, by the key of
+     * the entry they belong to.
      *
-     * A preview is a real widget, bound to a real id, so what the picker shows
-     * is the widget itself rather than a picture of it. These are not the home
-     * screen's ids: they last as long as the picker is open, and all but the one
-     * being taken are handed back when it closes.
+     * A preview is a real widget, bound to a real id, so what the page shows is
+     * the widget itself rather than a picture of it. These are not the home
+     * screen's ids: they last as long as the page is showing, and all but the one
+     * being taken are handed back when it goes.
      */
     private val previews = HashMap<String, Int>()
 
@@ -131,18 +131,18 @@ class WidgetHost(private val context: Context) {
     fun infoOf(hostId: Int): AppWidgetProviderInfo? =
         runCatching { manager.getAppWidgetInfo(hostId) }.getOrNull()
 
-    /** The id the picker is drawing [key] under, if it has been asked for yet. */
+    /** The id the widget page is drawing [key] under, if it has been asked for yet. */
     private fun previewIdOf(key: String): Int? = previews[key]
     /**
-     * Reserves and binds an id so that the widget behind [info] can be drawn in
-     * the picker, and tells the system how much room it is being drawn in.
+     * Reserves and binds an id so that the widget behind [info] can be drawn on
+     * the widget page, and tells the system how much room it is being drawn in.
      *
      * Binding is the part worth not doing twice, so the same id comes back every
      * time [key] is asked for.
      *
-     * Null when the system will not hand this widget over, which leaves the
-     * picker to offer it by name and to put the system's question to the user on
-     * the way in.
+     * Null when the system will not hand this widget over, which leaves the page
+     * to offer it by name and to put the system's question to the user on the way
+     * in.
      */
     fun previewId(key: String, info: AppWidgetProviderInfo, spanX: Int, spanY: Int): Int? {
         previewIdOf(key)?.let { return it }
@@ -175,8 +175,9 @@ class WidgetHost(private val context: Context) {
     /**
      * Hands back every id reserved for a preview.
      *
-     * Called when the picker closes, and whenever a widget is chosen: whatever is
-     * left of the previews is nothing but the ids they were drawn under.
+     * Called when the widget page goes away, and whenever a widget is chosen:
+     * whatever is left of the previews is nothing but the ids they were drawn
+     * under.
      */
     fun releasePreviews() {
         previews.values.forEach { releaseId(it) }
@@ -199,7 +200,7 @@ class WidgetHost(private val context: Context) {
         manager.getInstalledProviders().filter { it.provider != null }
     }.getOrDefault(emptyList())
 
-    /** The label shown in the widget picker. */
+    /** The label shown on the widget page. */
     fun labelOf(provider: AppWidgetProviderInfo): CharSequence =
         runCatching { provider.loadLabel(context.packageManager) }
             .getOrNull()

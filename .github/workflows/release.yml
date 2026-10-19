@@ -1,6 +1,6 @@
 name: Release
 
-# Cutting a release is pushing a tag:  git tag v0.1.1 && git push origin v0.1.1
+# Cutting a release is pushing a tag:  git tag vX.Y.Z && git push origin vX.Y.Z
 # The manual dispatch runs the same build but only leaves a workflow artifact,
 # which is a safe way to check the pipeline without publishing anything.
 on:
