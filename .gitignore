@@ -12,3 +12,9 @@ local.properties
 # Build output of every module, not only the root project.
 **/build/
 .kotlin/
+
+# Release signing material. The keystore itself lives outside the repo, but
+# ignore any stray copies so it can never be committed by accident.
+keystore.properties
+*.jks
+*.keystore
