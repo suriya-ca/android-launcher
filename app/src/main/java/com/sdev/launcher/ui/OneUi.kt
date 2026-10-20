@@ -89,6 +89,7 @@ enum class Glyph {
     ICONS,
     THEME,
     CLOSE,
+    RENAME,
 }
 
 /** The dim behind a card, which also swallows the taps that dismiss it. */
@@ -404,6 +405,13 @@ private fun DrawScope.drawGlyph(glyph: Glyph, tint: Color) {
         Glyph.CLOSE -> {
             bar(-0.26f, -0.26f, 0.26f, 0.26f)
             bar(0.26f, -0.26f, -0.26f, 0.26f)
+        }
+
+        Glyph.RENAME -> {
+            // A pencil: a shaft, and a nib at the end of it.
+            bar(0.24f, -0.24f, -0.16f, 0.16f)
+            bar(-0.2f, 0.2f, -0.04f, 0.04f)
+            bar(-0.26f, 0.26f, -0.18f, 0.18f)
         }
     }
 }

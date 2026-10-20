@@ -230,7 +230,7 @@ fun HomeScreen(
                 // Coming from home or the drawer lands in a free slot instead,
                 // so the mark has to sit where it will actually go.
                 else -> state.dockApps.entries
-                    .firstOrNull { (_, app) -> app.key == it.app.key }
+                    .firstOrNull { (_, app) -> app.key == it.app?.key }
                     ?.key
                     ?: findFreeCell(
                         occupied = state.dockApps.keys,
@@ -320,7 +320,9 @@ fun HomeScreen(
         // space above the grid is not a cell of it.
         val cell = dropArea.cellAt(position, allowAbove = false)
         if (cell != null) {
-            return cell !in state.homeApps && cell !in state.settings.widgetCells()
+            // A cell holding a folder is not empty either: there is something
+            // on it that can be picked up.
+            return cell !in state.homeCells && cell !in state.settings.widgetCells()
         }
 
         val slot = dropArea.dockSlotAt(position, dockTargets, enabled = !editing)
@@ -557,7 +559,7 @@ fun HomeScreen(
         // Which cells on a page are taken, for the little page thumbnails.
         val cellsOnPage: (Int) -> Set<Int> = { page ->
             val cells = settings.grid.cellsOfPage(page)
-            (state.homeApps.keys + state.settings.widgetCells())
+            (state.homeCells.keys + state.settings.widgetCells())
                 .filter { it in cells }
                 .toSet()
         }
@@ -669,7 +671,7 @@ private fun HomeGrid(
                     val held = drag?.let { it.area == DragArea.HOME && it.index == index } == true
 
                     HomeCell(
-                        app = state.homeApps[index],
+                        item = state.homeCells[index],
                         area = HomeArea.HOME,
                         index = index,
                         state = state,
@@ -731,7 +733,7 @@ private fun HomeDock(
             val held = drag?.let { it.area == DragArea.DOCK && it.index == index } == true
 
             HomeCell(
-                app = app,
+                item = HomeCellItem.App(app),
                 area = HomeArea.DOCK,
                 index = index,
                 state = state,
@@ -1004,7 +1006,7 @@ private fun BoxScope.DropGridOverlay(
 /** One cell of the home screen, empty or not. */
 @Composable
 private fun HomeCell(
-    app: AppInfo?,
+    item: HomeCellItem?,
     area: HomeArea,
     index: Int,
     state: LauncherUiState,
@@ -1030,30 +1032,55 @@ private fun HomeCell(
             )
         }
 
-        if (app == null) return@Box
+        if (item == null) return@Box
 
-        val badgeCount = if (state.settings.showNotificationBadges) {
-            state.notificationCounts[app.componentName.packageName] ?: 0
-        } else {
-            0
+        when (item) {
+            is HomeCellItem.App -> {
+                val app = item.app
+                val badgeCount = if (state.settings.showNotificationBadges) {
+                    state.notificationCounts[app.componentName.packageName] ?: 0
+                } else {
+                    0
+                }
+
+                DraggableIcon(
+                    app = app,
+                    icon = state.icons[app.key],
+                    area = area.asDragArea(),
+                    index = index,
+                    controller = controller,
+                    handlers = handlers,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .alpha(if (dimmed) 0.4f else 1f),
+                    iconSize = iconSize,
+                    showLabel = showLabel,
+                    labelColor = Color.White,
+                    labelShadow = true,
+                    badgeCount = badgeCount,
+                )
+            }
+
+            is HomeCellItem.Folder -> {
+                val folder = item.folder
+
+                DraggableFolder(
+                    folder = folder,
+                    icons = state.icons,
+                    area = area.asDragArea(),
+                    index = index,
+                    controller = controller,
+                    handlers = handlers,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .alpha(if (dimmed) 0.4f else 1f),
+                    iconSize = iconSize,
+                    showLabel = showLabel,
+                    labelColor = Color.White,
+                    labelShadow = true,
+                )
+            }
         }
-
-        DraggableIcon(
-            app = app,
-            icon = state.icons[app.key],
-            area = area.asDragArea(),
-            index = index,
-            controller = controller,
-            handlers = handlers,
-            modifier = Modifier
-                .fillMaxWidth()
-                .alpha(if (dimmed) 0.4f else 1f),
-            iconSize = iconSize,
-            showLabel = showLabel,
-            labelColor = Color.White,
-            labelShadow = true,
-            badgeCount = badgeCount,
-        )
     }
 }
 

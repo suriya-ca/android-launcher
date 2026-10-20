@@ -9,14 +9,17 @@ import android.net.Uri
 import android.os.Process
 import android.provider.Settings
 import android.widget.Toast
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.sdev.launcher.LauncherApp
 import com.sdev.launcher.R
 import com.sdev.launcher.data.AppInfo
+import com.sdev.launcher.data.AppPlace
 import com.sdev.launcher.data.AppRepository
 import com.sdev.launcher.data.HomeArea
+import com.sdev.launcher.data.HomeItem
 import com.sdev.launcher.data.LauncherSettings
 import com.sdev.launcher.data.SettingsRepository
 import com.sdev.launcher.data.SortOrder
@@ -36,6 +39,18 @@ import kotlinx.coroutines.launch
 internal const val NO_WIDGET = -1
 
 /**
+ * What a home screen cell holds, as the screen draws it.
+ */
+sealed interface HomeCellItem {
+
+    /** A cell holding one app. */
+    data class App(val app: AppInfo) : HomeCellItem
+
+    /** A cell holding a folder of apps. */
+    data class Folder(val folder: FolderEntry) : HomeCellItem
+}
+
+/**
  * One entry in the widget picker: a widget that can be added, what to call it,
  * and how many cells it takes.
  */
@@ -51,6 +66,26 @@ data class WidgetChoice(
     val spanX: Int,
     val spanY: Int,
 )
+
+/**
+ * A folder as the home screen shows it: its name and the apps in it.
+ *
+ * The apps are the ones that are still installed, in the order the folder
+ * keeps them.
+ */
+data class FolderEntry(
+    val id: String,
+    val name: String,
+    val apps: List<AppInfo>,
+) {
+    /** The name to show: the one the user gave it, or the default. */
+    val label: String get() = name.ifBlank { DEFAULT_FOLDER_NAME }
+
+    companion object {
+        /** What a folder is called before it is given a name of its own. */
+        const val DEFAULT_FOLDER_NAME = "Folder"
+    }
+}
 
 /** One app's widgets: the heading the picker gives them, and the widgets under it. */
 data class WidgetGroup(
@@ -116,6 +151,14 @@ data class LauncherUiState(
     /** The cell a widget has just been placed on, for its flash. */
     val revealWidget: Int? = null,
     /**
+     * The folder that is open, if any.
+     *
+     * A folder is opened by tapping it, and closed by tapping the home screen
+     * or pressing back. While it is open, the apps in it can be taken out of it
+     * and put back in a different order.
+     */
+    val openFolder: String? = null,
+    /**
      * The cell an app was just pinned to. The home screen pulses it once it is
      * actually on screen, which is how an "add to home screen" that happened
      * while the drawer was open becomes visible.
@@ -145,17 +188,33 @@ data class LauncherUiState(
         get() = apps.filter { it.key !in settings.hiddenApps }
 
     /**
-     * The pinned home screen cells, with apps that are no longer installed
-     * dropped.
-     *
-     * Hidden apps stay: hiding takes an app out of the drawer, not off the home
-     * screen, so an icon the user pinned is not quietly swallowed by hiding the
-     * app it launches.
+     * The pinned home screen cells that hold an app. A cell holding a folder is
+     * not in here: it is in [homeFolders].
      */
-    val homeApps: Map<Int, AppInfo> get() = resolve(settings.homeItems)
+    val homeApps: Map<Int, AppInfo> get() = resolveApps(settings.homeItems)
+
+    /**
+     * The folders on the home screen, by the cell they are in.
+     *
+     * A folder that has lost every app it had is not a folder, and is left
+     * out: the cell it was in is empty.
+     */
+    val homeFolders: Map<Int, FolderEntry> get() = resolveFolders()
+
+    /**
+     * The home screen cells with what they hold, whether an app or a folder.
+     */
+    val homeCells: Map<Int, HomeCellItem> get() = buildMap {
+        putAll(resolveApps(settings.homeItems).mapValues { HomeCellItem.App(it.value) })
+        putAll(resolveFolders().mapValues { HomeCellItem.Folder(it.value) })
+    }
 
     /** The dock slots, with apps that are no longer installed dropped. */
     val dockApps: Map<Int, AppInfo> get() = resolve(settings.dockItems)
+
+    /** The folder with [id], if there is one. */
+    fun folder(id: String): FolderEntry? =
+        homeFolders.values.firstOrNull { it.id == id }
 
     private fun resolve(slots: Map<Int, String>): Map<Int, AppInfo> {
         if (slots.isEmpty()) return emptyMap()
@@ -163,6 +222,31 @@ data class LauncherUiState(
         val byKey = apps.associateBy { it.key }
         return slots.mapNotNull { (index, key) ->
             byKey[key]?.let { index to it }
+        }.toMap()
+    }
+
+    private fun resolveApps(items: Map<Int, HomeItem>): Map<Int, AppInfo> {
+        if (items.isEmpty()) return emptyMap()
+
+        val byKey = apps.associateBy { it.key }
+        return items.mapNotNull { (index, item) ->
+            val key = (item as? HomeItem.App)?.key ?: return@mapNotNull null
+            byKey[key]?.let { index to it }
+        }.toMap()
+    }
+
+    private fun resolveFolders(): Map<Int, FolderEntry> {
+        val folders = settings.folders
+        if (folders.isEmpty()) return emptyMap()
+
+        val byKey = apps.associateBy { it.key }
+        return settings.homeItems.mapNotNull { (index, item) ->
+            val id = (item as? HomeItem.Folder)?.id ?: return@mapNotNull null
+            val folder = folders[id] ?: return@mapNotNull null
+            val members = folder.appKeys.mapNotNull { byKey[it] }
+            if (members.isEmpty()) return@mapNotNull null
+
+            index to FolderEntry(id = id, name = folder.name, apps = members)
         }.toMap()
     }
 }
@@ -469,7 +553,192 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     /**
-     * Pins an app to the home screen: where the user dropped it, or the first
+     * Where the app being carried actually is, so that a drop knows where to
+     * take it from.
+     *
+     * The area the drag came from is usually the answer, but an app in the
+     * drawer may also be pinned to the home screen, and the drag is of the
+     * drawer copy. The app is in one place at a time, so the place it is
+ * really in is the one that matters.
+     */
+    private fun placeOf(drag: DragState): AppPlace {
+        val app = drag.app ?: return placeFromArea(drag)
+        return _state.value.settings.placeOf(app.key) ?: placeFromArea(drag)
+    }
+
+    /** The place the drag came from, taken at its word. */
+    private fun placeFromArea(drag: DragState): AppPlace = when (drag.area) {
+        DragArea.DRAWER -> AppPlace.Drawer
+        DragArea.HOME -> AppPlace.Home(drag.index)
+        DragArea.DOCK -> AppPlace.Dock(drag.index)
+        // The folder it came out of. An app taken out of a folder has to go
+        // back into it if the drop does not work out.
+        DragArea.FOLDER -> AppPlace.InFolder(drag.folderId.orEmpty())
+    }
+
+    /**
+     * Puts the app on the home screen cell [cell], taking it from wherever it
+     * was, and says which cell it landed on.
+     */
+    fun dropAppOnHomeCell(drag: DragState, cell: Int) {
+        val app = drag.app ?: return
+        val from = placeOf(drag)
+
+        viewModelScope.launch {
+            val landed = settingsRepository.dropAppOnCell(app.key, cell, from)
+            if (landed != null) {
+                _state.update { it.copy(revealCell = HomeArea.HOME to landed) }
+            }
+        }
+    }
+
+    /**
+     * Puts the app in the dock, taking it from wherever it was.
+     *
+     * The dock holds apps only, so a folder cannot go in it: a folder that is
+     * let go on the dock stays where it is.
+     */
+    fun dropAppInDock(drag: DragState, slot: Int?) {
+        val app = drag.app ?: return
+        val from = placeOf(drag)
+
+        viewModelScope.launch {
+            val landed = settingsRepository.dropAppInDock(app.key, slot, from)
+
+            if (landed == null) {
+                // The dock is full, so there was nowhere for it to go.
+                Toast.makeText(
+                    getApplication<Application>(),
+                    getApplication<Application>().getString(R.string.dock_full),
+                    Toast.LENGTH_SHORT,
+                ).show()
+            } else {
+                _state.update { it.copy(revealCell = HomeArea.DOCK to landed) }
+            }
+        }
+    }
+
+    /**
+     * Puts the folder on the home screen cell [cell], merging it with whatever
+     * is there.
+     */
+    fun dropFolderOnHomeCell(drag: DragState, cell: Int) {
+        val folder = (drag.dragged as? Dragged.Folder)?.folderId ?: return
+
+        viewModelScope.launch {
+            val landed = settingsRepository.dropFolderOnHomeCell(folder, cell)
+            if (landed != null) {
+                _state.update { it.copy(revealCell = HomeArea.HOME to landed) }
+            }
+        }
+    }
+
+    /**
+     * Says that a folder cannot go in the dock.
+     *
+     * The dock holds apps and nothing else, so a folder let go on it stays
+     * where it is.
+     */
+    fun refuseFolderInDock() {
+        val context = getApplication<Application>()
+
+        Toast.makeText(
+            context,
+            context.getString(R.string.folder_home_only),
+            Toast.LENGTH_SHORT,
+        ).show()
+    }
+
+    /**
+     * Moves the app at [from] inside the folder to [to], so that the apps in a
+     * folder can be put in a different order.
+     */
+    fun moveFolderApp(folderId: String, from: Int, to: Int) {
+        viewModelScope.launch { settingsRepository.moveFolderApp(folderId, from, to) }
+    }
+
+    /** Calls the folder [id] [name]. */
+    fun renameFolder(id: String, name: String) {
+        viewModelScope.launch { settingsRepository.renameFolder(id, name) }
+    }
+
+    /**
+     * Takes the folder off the home screen. The apps in it are left installed
+     * and go back to being apps in the drawer.
+     */
+    fun removeFolder(id: String) {
+        viewModelScope.launch {
+            settingsRepository.removeFolder(id)
+            _state.update { current ->
+                if (current.openFolder == id) current.copy(openFolder = null) else current
+            }
+        }
+    }
+
+    /**
+     * Takes the folder off the home screen and puts it away.
+     *
+     * The apps in it are left installed and go back to being apps in the
+     * drawer, and the folder is no longer open.
+     */
+    fun deleteFolder(id: String) {
+        removeFolder(id)
+    }
+
+    /**
+     * Takes the app out of the folder and puts it on the home screen, so that
+     * it is still on the screen and is simply not in the folder any more.
+     */
+    fun removeAppFromFolder(folderId: String, app: AppInfo) {
+        viewModelScope.launch {
+            val landed = settingsRepository.removeAppFromFolder(folderId, app.key)
+            if (landed != null) {
+                _state.update { it.copy(revealCell = HomeArea.HOME to landed) }
+            }
+        }
+    }
+
+    /**
+     * Takes the app out of the folder and off the home screen altogether: it
+     * goes back to being an app in the drawer.
+     *
+     * This is what dragging an app out of a folder to the Remove target does.
+     */
+    fun unpinFolderApp(folderId: String, app: AppInfo) {
+        viewModelScope.launch { settingsRepository.unpinFolderApp(folderId, app.key) }
+    }
+
+    /**
+     * Opens the folder [id], so that the apps in it can be seen and rearranged.
+     */
+    fun openFolder(id: String) {
+        _state.update { it.copy(openFolder = id) }
+    }
+
+    /**
+     * Puts the folder away.
+     *
+     * The apps in it stay where they are: a folder that is closed is not a
+     * folder that has been emptied.
+     */
+    fun closeFolder() {
+        _state.update { it.copy(openFolder = null) }
+    }
+
+    /**
+     * Removes an app that was dragged out of a folder to the Remove target.
+     *
+     * The folder is found from the app rather than from the drag, so that the
+     * app is taken out of the folder it is really in.
+     */
+    fun removeFromFolder(drag: DragState) {
+        val app = drag.app ?: return
+        val folder = _state.value.settings.folderOf(app.key) ?: return
+        unpinFolderApp(folder.id, app)
+    }
+
+    /**
+     * Puts the app on the home screen: where the user dropped it, or the first
      * free cell when it was added from the app's actions.
      */
     fun addToHome(app: AppInfo, preferred: Int? = null) =
@@ -485,33 +754,26 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch { settingsRepository.clearHomeItem(area, index) }
     }
 
-    fun moveHomeItem(from: HomeArea, fromIndex: Int, to: HomeArea, toIndex: Int) {
-        viewModelScope.launch {
-            settingsRepository.moveHomeItem(from, fromIndex, to, toIndex)
-        }
-    }
-
     /**
      * Moves a home screen icon into the dock without disturbing the apps that
      * are already there. The slot under the finger is used when free; otherwise
      * the nearest free slot is.
      */
     fun moveHomeItemToDock(fromIndex: Int, preferred: Int?) {
-        val context = getApplication<Application>()
+        val app = _state.value.settings.homeItems[fromIndex]
+            ?.let { (it as? HomeItem.App)?.key }
+            ?.let { key -> _state.value.apps.firstOrNull { it.key == key } }
+            ?: return
 
-        viewModelScope.launch {
-            val slot = settingsRepository.moveHomeItemToDock(fromIndex, preferred)
-
-            if (slot == null) {
-                Toast.makeText(
-                    context,
-                    context.getString(R.string.dock_full),
-                    Toast.LENGTH_SHORT,
-                ).show()
-            } else {
-                _state.update { it.copy(revealCell = HomeArea.DOCK to slot) }
-            }
-        }
+        dropAppInDock(
+            DragState(
+                dragged = Dragged.App(app),
+                area = DragArea.HOME,
+                index = fromIndex,
+                position = Offset.Zero,
+            ),
+            preferred,
+        )
     }
 
     /**
@@ -523,19 +785,25 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val occupied = settings.homeItems.keys + settings.widgetCells()
         val cell = findFreeCellOnPage(occupied, settings.grid, page) ?: return
 
-        when (drag.area) {
-            DragArea.DRAWER -> addToHome(drag.app, cell)
+        when (drag.dragged) {
+            is Dragged.Folder -> dropFolderOnHomeCell(drag, cell)
 
-            DragArea.HOME, DragArea.DOCK -> {
-                // Already there: dropping it back on its own page does nothing.
-                if (drag.area == DragArea.HOME && drag.index == cell) return
+            is Dragged.App -> {
+                when (drag.area) {
+                    DragArea.DRAWER -> addToHome(drag.app ?: return, cell)
 
-                moveHomeItem(
-                    from = if (drag.area == DragArea.HOME) HomeArea.HOME else HomeArea.DOCK,
-                    fromIndex = drag.index,
-                    to = HomeArea.HOME,
-                    toIndex = cell,
-                )
+                    DragArea.HOME, DragArea.DOCK -> {
+                        // Already there: dropping it back on its own page does
+                        // nothing.
+                        if (drag.area == DragArea.HOME && drag.index == cell) return
+
+                        dropAppOnHomeCell(drag, cell)
+                    }
+
+                    // An app taken out of a folder goes back on the home
+                    // screen, not into the folder it came from.
+                    DragArea.FOLDER -> dropAppOnHomeCell(drag, cell)
+                }
             }
         }
     }
@@ -557,19 +825,55 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private fun pin(app: AppInfo, area: HomeArea, preferred: Int?, fullMessage: Int) {
         val context = getApplication<Application>()
         val settings = _state.value.settings
-        val slots = if (area == HomeArea.HOME) settings.homeItems else settings.dockItems
-        if (slots.containsValue(app.key)) return
 
-        // Adding an app to the dock that is already pinned to a home page is a
-        // move, not a second copy. The home icon is the thing that goes.
-        if (area == HomeArea.DOCK) {
-            val homeSlot = settings.homeItems.entries
-                .firstOrNull { it.value == app.key }
-                ?.key
+        // An app that is already on the home screen is not put there a second
+        // time: it is moved instead, the same as it is for the dock.
+        val homeSlot = settings.homeItems.entries
+            .firstOrNull { (it.value as? HomeItem.App)?.key == app.key }
+            ?.key
 
-            if (homeSlot != null) {
-                moveHomeItemToDock(homeSlot, preferred)
-                return
+        val folder = settings.folderOf(app.key)
+
+        when (area) {
+            HomeArea.HOME -> {
+                // Already in a cell: there is nothing to add it to.
+                if (homeSlot != null) return
+
+                // Inside a folder: it comes out of it and lands on the screen.
+                if (folder != null) {
+                    viewModelScope.launch {
+                        settingsRepository.dropAppOnCell(
+                            key = app.key,
+                            cell = preferred ?: 0,
+                            from = AppPlace.InFolder(folder.id),
+                        )
+                    }
+                    return
+                }
+            }
+
+            HomeArea.DOCK -> {
+                // Already in the dock: there is nothing to add it to.
+                if (settings.dockItems.containsValue(app.key)) return
+
+                // On the home screen: it moves to the dock rather than being
+                // there twice.
+                if (homeSlot != null) {
+                    moveHomeItemToDock(homeSlot, preferred)
+                    return
+                }
+
+                // Inside a folder: it leaves the folder for the dock.
+                if (folder != null) {
+                    viewModelScope.launch {
+                        settingsRepository.dropAppInDock(
+                            key = app.key,
+                            slot = preferred,
+                            from = AppPlace.InFolder(folder.id),
+                        )
+                    }
+                    return
+                }
             }
         }
 
@@ -956,7 +1260,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private suspend fun loadIcons(apps: List<AppInfo>) {
         val sizePx = iconSizePx()
         val settings = _state.value.settings
-        val pinned = settings.homeItems.values + settings.dockItems.values
+        val pinned = settings.pinnedAppKeys
         val wanted = apps.filter { it.key !in settings.hiddenApps || it.key in pinned }
 
         val decoded = HashMap<String, ImageBitmap>(wanted.size)

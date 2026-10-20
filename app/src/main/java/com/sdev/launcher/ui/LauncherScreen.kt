@@ -95,6 +95,19 @@ fun LauncherScreen(
     var widgetTarget by remember { mutableStateOf<WidgetTarget?>(null) }
     var pageTarget by remember { mutableStateOf<PageTarget?>(null) }
 
+    // The folder being renamed, if one is being renamed.
+    var renamingFolder by remember { mutableStateOf<String?>(null) }
+
+    // The folder that is open, and the one whose name is being asked for, are
+    // put away when the home screen is rearranged: the panel is over the page,
+    // and the page has to be live for the panel to be of any use.
+    LaunchedEffect(state.editing) {
+        if (state.editing) {
+            viewModel.closeFolder()
+            renamingFolder = null
+        }
+    }
+
     // Page options belong to the page they were asked about. Leaving edit mode
     // or turning to another page puts them away with it.
     LaunchedEffect(state.editing, state.homePage) {
@@ -107,6 +120,12 @@ fun LauncherScreen(
     var removeZone by remember { mutableStateOf<Rect?>(null) }
     var uninstallZone by remember { mutableStateOf<Rect?>(null) }
 
+    // Where the open folder is on the screen. An app carried out of it is
+    // dropped on the home screen when the finger leaves the folder, and put
+    // back where it was when it does not.
+    var folderBounds by remember { mutableStateOf<Rect?>(null) }
+    var folderMembers by remember { mutableStateOf<Map<Int, Rect>>(emptyMap()) }
+
     // The one drag in flight, shared by both pages.
     val dragController = remember { IconDragController() }
 
@@ -116,6 +135,12 @@ fun LauncherScreen(
     // there is only ever one answer to "which cell is here".
     val dropArea = remember { HomeDropArea() }
     var dragLayerOrigin by remember { mutableStateOf(Offset.Zero) }
+
+    // The place under the open folder is not a place the home screen can be
+    // dropped on, so the card is told about and forgotten about with it.
+    LaunchedEffect(state.openFolder) {
+        if (state.openFolder == null) dropArea.folderCard = null
+    }
 
     val band = with(LocalDensity.current) { DRAWER_PULL_ZONE.toPx() }
 
@@ -134,18 +159,37 @@ fun LauncherScreen(
 
     val gestures = remember(dragController, viewModel) {
         IconGestureHandlers(
-            onTap = { app ->
+            onTap = { dragged, area ->
+                // A tap on the home screen while a folder is open puts the
+                // folder away: the panel is over the page, and the page should
+                // not do something else behind it. A tap on an app in the
+                // folder itself opens the app, and the folder goes with it.
+                if (area == DragArea.FOLDER) {
+                    viewModel.closeFolder()
+                    viewModel.launch((dragged as? Dragged.App)?.app ?: return@IconGestureHandlers)
+                    return@IconGestureHandlers
+                }
+
+                if (viewModel.state.value.openFolder != null) {
+                    viewModel.closeFolder()
+                    return@IconGestureHandlers
+                }
+
                 // While the home screen is being rearranged a tap is how the
                 // mode is left, never how an app is opened: the icons and the
                 // wallpaper are one surface there, the way the dim over them
                 // used to make them.
                 if (viewModel.state.value.editing) {
                     viewModel.setEditing(false)
-                } else {
-                    viewModel.launch(app)
+                    return@IconGestureHandlers
+                }
+
+                when (dragged) {
+                    is Dragged.App -> viewModel.launch(dragged.app)
+                    is Dragged.Folder -> viewModel.openFolder(dragged.folderId)
                 }
             },
-            onLongPress = { app, area, index, anchor ->
+            onLongPress = { dragged, area, index, anchor ->
                 // The card is not offered while the home screen is being
                 // rearranged: the pages are live again behind the dim so they
                 // can be swiped between, and a card over them would take the
@@ -154,12 +198,20 @@ fun LauncherScreen(
                     // Only an icon that is pinned somewhere can be taken off
                     // again.
                     widgetTarget = null
-                    actionTarget = ActionTarget(
-                        app = app,
-                        area = if (area == DragArea.DRAWER) null else area,
-                        index = index,
-                        anchor = anchor,
-                    )
+                    actionTarget = when (dragged) {
+                        is Dragged.App -> ActionTarget.App(
+                            app = dragged.app,
+                            area = if (area == DragArea.DRAWER) null else area,
+                            index = index,
+                            anchor = anchor,
+                        )
+
+                        is Dragged.Folder -> ActionTarget.Folder(
+                            folderId = dragged.folderId,
+                            index = index,
+                            anchor = anchor,
+                        )
+                    }
                 }
             },
             onDragStart = {
@@ -188,11 +240,12 @@ fun LauncherScreen(
                         when (drag.area) {
                             DragArea.HOME -> viewModel.removeFromHome(HomeArea.HOME, drag.index)
                             DragArea.DOCK -> viewModel.removeFromHome(HomeArea.DOCK, drag.index)
+                            DragArea.FOLDER -> viewModel.removeFromFolder(drag)
                             DragArea.DRAWER -> Unit
                         }
                     }
 
-                    zone == DragTarget.UNINSTALL -> viewModel.uninstall(drag.app)
+                    zone == DragTarget.UNINSTALL -> drag.app?.let { viewModel.uninstall(it) }
 
                     page != null -> viewModel.dropOnPage(drag, page)
 
@@ -220,53 +273,91 @@ fun LauncherScreen(
                         val cell = dropArea.cellAt(position, allowAbove = incoming)
                             ?: if (incoming) dropArea.topRowAt(position, band) else null
 
-                        when (drag.area) {
-                            // Picked up in the drawer: a new pin, placed where it
-                            // was let go.
-                            DragArea.DRAWER -> when {
-                                slot != null -> viewModel.addToDock(drag.app, slot)
+                        // A widget is in the way of the cell under the finger, so
+                        // nothing can be put there.
+                        val ontoWidget = cell != null && cell in covered
 
-                                cell != null && cell !in covered ->
-                                    viewModel.addToHome(drag.app, cell)
+                        when (val carried = drag.dragged) {
+                            // A folder is carried whole. It goes on the home
+                            // screen and nowhere else: the dock holds apps.
+                            is Dragged.Folder -> {
+                                when {
+                                    slot != null -> viewModel.refuseFolderInDock()
 
-                                // Let go inside the drawer: nothing to pin.
+                                    cell != null && !ontoWidget ->
+                                        viewModel.dropFolderOnHomeCell(drag, cell)
+                                }
                             }
 
-                            // Already on the home screen: this is a move.
-                            DragArea.HOME, DragArea.DOCK -> {
-                                val ontoWidget = cell != null && cell in covered
-                                val from = if (drag.area == DragArea.HOME) {
-                                    HomeArea.HOME
-                                } else {
-                                    HomeArea.DOCK
+                            is Dragged.App -> when (drag.area) {
+                                // Picked up in the drawer: a new pin, placed
+                                // where it was let go. Landing it on an app
+                                // makes a folder of the two, the same as it
+                                // does on the home screen.
+                                DragArea.DRAWER -> {
+                                    val app = carried.app
+
+                                    when {
+                                        slot != null && app != null ->
+                                            viewModel.addToDock(app, slot)
+
+                                        cell != null && cell !in covered && app != null ->
+                                            viewModel.dropAppOnHomeCell(drag, cell)
+
+                                        // Let go inside the drawer: nothing to pin.
+                                    }
                                 }
 
-                                when {
-                                    // A home icon let go on the dock moves into a
-                                    // free slot near the finger. It does not
-                                    // swap with the dock app it was dropped on:
-                                    // that would replace it and put it back on
-                                    // the home screen.
-                                    slot != null && drag.area == DragArea.HOME ->
-                                        viewModel.moveHomeItemToDock(drag.index, slot)
+                                // Already on the home screen: this is a move.
+                                DragArea.HOME, DragArea.DOCK -> {
+                                    when {
+                                        // A home icon let go on the dock moves into a
+                                        // free slot near the finger. It does not
+                                        // swap with the dock app it was dropped on:
+                                        // that would replace it and put it back on
+                                        // the home screen.
+                                        slot != null && drag.area == DragArea.HOME ->
+                                            viewModel.moveHomeItemToDock(drag.index, slot)
 
-                                    // Dock to dock is a reorder, so a swap is what
-                                    // moving one past another means.
-                                    slot != null -> viewModel.moveHomeItem(
-                                        from,
-                                        drag.index,
-                                        HomeArea.DOCK,
-                                        slot,
-                                    )
+                                        // Dock to dock is a reorder, so a swap is what
+                                        // moving one past another means.
+                                        slot != null -> viewModel.dropAppInDock(drag, slot)
 
-                                    cell != null && !ontoWidget -> viewModel.moveHomeItem(
-                                        from,
-                                        drag.index,
-                                        HomeArea.HOME,
-                                        cell,
-                                    )
-                                    // Let go outside both areas: it stays where
-                                    // it was.
+                                        cell != null && !ontoWidget ->
+                                            viewModel.dropAppOnHomeCell(drag, cell)
+
+                                        // Let go outside both areas: it stays where
+                                        // it was.
+                                    }
+                                }
+
+                                // Taken out of a folder: it either takes another
+                                // app's place inside the folder, or it goes back
+                                // on the home screen.
+                                DragArea.FOLDER -> {
+                                    val member = folderMembers.entries
+                                        .firstOrNull { (index, bounds) ->
+                                            index != drag.index && bounds.contains(position)
+                                        }
+                                        ?.key
+
+                                    when {
+                                        // Dropped on another app in the folder: it
+                                        // takes that app's place.
+                                        member != null -> viewModel.moveFolderApp(
+                                            drag.folderId.orEmpty(),
+                                            drag.index,
+                                            member,
+                                        )
+
+                                        // Still over the folder: it stays in it.
+                                        folderBounds?.contains(position) == true -> Unit
+
+                                        slot != null -> viewModel.dropAppInDock(drag, slot)
+
+                                        cell != null && !ontoWidget ->
+                                            viewModel.dropAppOnHomeCell(drag, cell)
+                                    }
                                 }
                             }
                         }
@@ -566,6 +657,50 @@ fun LauncherScreen(
             }
         }
 
+        // The folder that is open, shown over the home screen. It is drawn here
+        // rather than in a popup so that an app can be carried out of it and
+        // onto the grid behind: a popup is a window of its own, and what is
+        // carried in it could never leave.
+        //
+        // While an app is on its way out of the folder the panel goes
+        // transparent, so that the home screen behind it can be seen and can
+        // say where the app would land. It is still drawn: taking it away
+        // would take the app that is being carried away with it.
+        val fromFolder = dragController.drag
+        val leftTheFolder = fromFolder?.area == DragArea.FOLDER &&
+            fromFolder.moved &&
+            folderBounds?.contains(fromFolder.position) == false
+
+        state.openFolder?.let { folderId ->
+            val folder = state.folder(folderId)
+
+            if (folder == null) {
+                // The folder is gone: it was removed, or the app in it was.
+                viewModel.closeFolder()
+            } else {
+                FolderPanel(
+                    folder = folder,
+                    icons = state.icons,
+                    controller = dragController,
+                    handlers = gestures,
+                    onDismiss = viewModel::closeFolder,
+                    onGeometry = { card, members ->
+                        folderBounds = card
+                        folderMembers = members
+                    },
+                    alpha = if (leftTheFolder) 0f else 1f,
+                )
+            }
+        }
+
+        // While the panel is there it covers part of the grid, and a place
+        // under it is not a place the home screen can be dropped on. Once it
+        // goes transparent the grid is bare again, and the app on its way out
+        // can be dropped anywhere on it.
+        LaunchedEffect(folderBounds, leftTheFolder) {
+            dropArea.folderCard = if (leftTheFolder) null else folderBounds
+        }
+
         // The dim that says a card is up. It is drawn over the pages so a tap
         // that misses the card puts it away rather than reaching the icon behind
         // it.
@@ -611,7 +746,7 @@ fun LauncherScreen(
                     pageCount = state.settings.homePages,
                     anchor = target.anchor,
                     hasContent = state.settings.grid.cellsOfPage(target.page).any { cell ->
-                        cell in state.homeApps || cell in state.settings.widgetCells()
+                        cell in state.homeCells || cell in state.settings.widgetCells()
                     },
                     isMainPage = target.page == state.settings.mainHomePage,
                     onSetMainPage = { viewModel.setMainHomePage(target.page) },
@@ -686,7 +821,7 @@ fun LauncherScreen(
                 removable -> DragTargets(
                     position = carried,
                     showUninstall = drag?.let {
-                        it.app.componentName.packageName != context.packageName
+                        it.app?.componentName?.packageName != context.packageName
                     } == true,
                     onZones = { remove, uninstall ->
                         removeZone = remove
@@ -700,12 +835,34 @@ fun LauncherScreen(
         // Drawn last and above every page, so the icon stays under the finger
         // wherever it came from.
         dragController.drag?.let { current ->
-            DragOverlay(
-                drag = current,
-                icon = state.icons[current.app.key],
-                iconSize = state.settings.iconSize.sizeDp.dp,
-                origin = dragLayerOrigin,
-            )
+            when (val dragged = current.dragged) {
+                is Dragged.App -> DragOverlay(
+                    drag = current,
+                    icon = state.icons[dragged.app.key],
+                    iconSize = state.settings.iconSize.sizeDp.dp,
+                    origin = dragLayerOrigin,
+                )
+
+                is Dragged.Folder -> {
+                    val folder = state.folder(dragged.folderId)
+
+                    if (folder != null) {
+                        DragOverlay(
+                            drag = current,
+                            icon = null,
+                            iconSize = state.settings.iconSize.sizeDp.dp,
+                            origin = dragLayerOrigin,
+                            content = {
+                                FolderPreviewIcon(
+                                    apps = folder.apps,
+                                    icons = state.icons,
+                                    size = state.settings.iconSize.sizeDp.dp,
+                                )
+                            },
+                        )
+                    }
+                }
+            }
         }
 
         // The cell size is only known once the home screen has been laid out,
@@ -734,78 +891,121 @@ fun LauncherScreen(
     }
 
     actionTarget?.let { target ->
-        val isOurs = target.app.componentName.packageName == context.packageName
-        val settings = state.settings
-        val pinned = target.area != null
+        when (target) {
+            is ActionTarget.App -> {
+                val isOurs = target.app.componentName.packageName == context.packageName
+                val settings = state.settings
+                val pinned = target.area != null
 
-        AppActionCard(
-            app = target.app,
-            icon = state.icons[target.app.key],
-            anchor = target.anchor,
-            onDismiss = {
-                actionTarget = null
-            },
-            onAppInfo = {
-                viewModel.openAppInfo(target.app)
-                actionTarget = null
-            },
-            onUninstall = {
-                viewModel.uninstall(target.app)
-                actionTarget = null
-            },
-            // The launcher must not offer to hide or uninstall itself.
-            showUninstall = !isOurs,
-            onHide = if (isOurs) {
-                null
-            } else {
-                {
-                    viewModel.hide(target.app)
-                    actionTarget = null
-                }
-            },
-            onAddToHome = if (pinned || settings.homeItems.containsValue(target.app.key)) {
-                null
-            } else {
-                {
-                    viewModel.addToHome(target.app)
-                    actionTarget = null
-                }
-            },
-            onAddToDock = if (settings.dockItems.containsValue(target.app.key)) {
-                null
-            } else {
-                {
-                    viewModel.addToDock(target.app)
-                    actionTarget = null
-                }
-            },
-            // Dock apps keep their actions first; this is the way from one of
-            // them into the home screen's own edit mode.
-            onEditHome = if (target.area == DragArea.DOCK) {
-                {
-                    actionTarget = null
-                    viewModel.setEditing(true)
-                }
-            } else {
-                null
-            },
-            // Only offered where the icon was actually pressed: on the screen it
-            // is pinned to.
-            onRemove = target.area?.let { area ->
-                val home = if (area == DragArea.HOME) HomeArea.HOME else HomeArea.DOCK
+                AppActionCard(
+                    app = target.app,
+                    icon = state.icons[target.app.key],
+                    anchor = target.anchor,
+                    onDismiss = {
+                        actionTarget = null
+                    },
+                    onAppInfo = {
+                        viewModel.openAppInfo(target.app)
+                        actionTarget = null
+                    },
+                    onUninstall = {
+                        viewModel.uninstall(target.app)
+                        actionTarget = null
+                    },
+                    // The launcher must not offer to hide or uninstall itself.
+                    showUninstall = !isOurs,
+                    onHide = if (isOurs) {
+                        null
+                    } else {
+                        {
+                            viewModel.hide(target.app)
+                            actionTarget = null
+                        }
+                    },
+                    onAddToHome = if (pinned || settings.holdsApp(target.app.key)) {
+                        null
+                    } else {                        {
+                            viewModel.addToHome(target.app)
+                            actionTarget = null
+                        }
+                    },
+                    onAddToDock = if (settings.dockItems.containsValue(target.app.key)) {
+                        null
+                    } else {
+                        {
+                            viewModel.addToDock(target.app)
+                            actionTarget = null
+                        }
+                    },
+                    // Dock apps keep their actions first; this is the way from one
+                    // of them into the home screen's own edit mode.
+                    onEditHome = if (target.area == DragArea.DOCK) {
+                        {
+                            actionTarget = null
+                            viewModel.setEditing(true)
+                        }
+                    } else {
+                        null
+                    },
+                    // Only offered where the icon was actually pressed: on the screen it
+                    // is pinned to. An app inside a folder is not on the home
+                    // screen in its own right, so it leaves the folder instead.
+                    onRemove = target.area?.takeIf { it != DragArea.FOLDER }?.let { area ->
+                        val home = if (area == DragArea.HOME) HomeArea.HOME else HomeArea.DOCK
 
-                {
-                    viewModel.removeFromHome(home, target.index)
-                    actionTarget = null
-                }
-            },
-            removeLabel = stringResource(
-                if (target.area == DragArea.DOCK) {
-                    R.string.remove_from_dock
-                } else {
-                    R.string.remove_short
-                },
-            ),
+                        {
+                            viewModel.removeFromHome(home, target.index)
+                            actionTarget = null
+                        }
+                    },
+                    onRemoveFromFolder = if (target.area == DragArea.FOLDER) {
+                        {
+                            viewModel.removeAppFromFolder(
+                                state.openFolder.orEmpty(),
+                                target.app,
+                            )
+                            actionTarget = null
+                        }
+                    } else {
+                        null
+                    },
+                    removeLabel = stringResource(
+                        if (target.area == DragArea.DOCK) {
+                            R.string.remove_from_dock
+                        } else {
+                            R.string.remove_short
+                        },
+                    ),
+                )
+            }
+
+            is ActionTarget.Folder -> {
+                FolderActionCard(
+                    folder = state.folder(target.folderId),
+                    icons = state.icons,
+                    anchor = target.anchor,
+                    onDismiss = { actionTarget = null },
+                    onRename = {
+                        actionTarget = null
+                        renamingFolder = target.folderId
+                    },
+                    onRemove = {
+                        viewModel.deleteFolder(target.folderId)
+                        actionTarget = null
+                    },
+                )
+            }
+        }
+    }
+
+    // The question asked before a folder is given a name.
+    renamingFolder?.let { folderId ->
+        val folder = state.folder(folderId)
+
+        RenameFolderDialog(
+            current = folder?.name.orEmpty(),
+            onConfirm = { name -> viewModel.renameFolder(folderId, name) },
+            onDismiss = { renamingFolder = null },
         )
     }
 
@@ -972,14 +1172,33 @@ private fun DropZone(
     }
 }
 
-/** The app whose actions are showing, and where its icon is. */
-private data class ActionTarget(
-    val app: AppInfo,
-    /** The area it is pinned to, or null when it only lives in the drawer. */
-    val area: DragArea?,
-    val index: Int,
-    val anchor: Rect,
-)
+/**
+ * What is being acted on, and where its icon is.
+ *
+ * It is an app - on the home screen, in the dock, in the drawer or inside a
+ * folder - or a folder of apps.
+ */
+private sealed interface ActionTarget {
+
+    /** Where the icon is, so that the card can hang off it. */
+    val anchor: Rect
+
+    /** An app. */
+    data class App(
+        val app: AppInfo,
+        /** The area it is pinned to, or null when it only lives in the drawer. */
+        val area: DragArea?,
+        val index: Int,
+        override val anchor: Rect,
+    ) : ActionTarget
+
+    /** A folder, with the cell it is on. */
+    data class Folder(
+        val folderId: String,
+        val index: Int,
+        override val anchor: Rect,
+    ) : ActionTarget
+}
 
 /** The widget whose card is showing, and where it is. */
 private data class WidgetTarget(val cell: Int, val anchor: Rect)

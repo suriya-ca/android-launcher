@@ -41,13 +41,36 @@ import com.sdev.launcher.data.WidgetPlacement
 import kotlin.math.roundToInt
 
 /** Which part of the launcher an icon was picked up from. */
-enum class DragArea { DRAWER, HOME, DOCK }
+enum class DragArea { DRAWER, HOME, DOCK, FOLDER }
+
+/**
+ * What is being carried: an app, or a folder of apps.
+ *
+ * A folder is carried the way an app is - it can be picked up and dropped
+ * somewhere else - so it is part of what a drag holds rather than something
+ * the drag has to know about separately.
+ */
+sealed interface Dragged {
+
+    /** What tells this thing apart from every other one. */
+    val key: String
+
+    /** An app: from the drawer, a home cell, the dock, or a folder. */
+    data class App(val app: AppInfo) : Dragged {
+        override val key: String get() = app.key
+    }
+
+    /** A folder, carried from the home screen. */
+    data class Folder(val folderId: String) : Dragged {
+        override val key: String get() = folderId
+    }
+}
 
 /** An icon being carried: where it came from and where the finger is. */
 data class DragState(
-    val app: AppInfo,
+    val dragged: Dragged,
     val area: DragArea,
-    /** Home cell or dock slot; unused for the drawer. */
+    /** Home cell, dock slot, or place in a folder; unused for the drawer. */
     val index: Int,
     /** Finger position in root coordinates. */
     val position: Offset,
@@ -56,16 +79,32 @@ data class DragState(
      * press. A long press on its own only asks for the app's actions.
      */
     val moved: Boolean = false,
-)
+    /**
+     * The folder the app came out of, when it came out of one.
+     *
+     * It is not in [dragged] because the app itself is the thing being carried:
+     * what has to be remembered is where it has to go back to.
+     */
+    val folderId: String? = null,
+) {
+    /** The app being carried, when it is an app. */
+    val app: AppInfo? get() = (dragged as? Dragged.App)?.app
+}
 
 /** What an icon does when it is tapped, long-pressed without moving, or dropped. */
 class IconGestureHandlers(
-    val onTap: (AppInfo) -> Unit,
     /**
-     * Long-pressed: the actions for this app are wanted. [Rect] is where the
+     * Tapped. [DragArea] says where the icon was, which matters when the same
+     * gesture means different things in different places: a tap on an app
+     * inside a folder opens the app, and a tap on the home screen behind the
+     * folder puts the folder away.
+     */
+    val onTap: (Dragged, DragArea) -> Unit,
+    /**
+     * Long-pressed: the actions for this icon are wanted. [Rect] is where the
      * icon is, so the card that offers them can hang off it.
      */
-    val onLongPress: (AppInfo, DragArea, Int, Rect) -> Unit,
+    val onLongPress: (Dragged, DragArea, Int, Rect) -> Unit,
     /** The press has started to move, so it is a drag and not a request. */
     val onDragStart: () -> Unit,
     val onDrop: (DragState, Offset) -> Unit,
@@ -165,8 +204,14 @@ class IconDragController {
      */
     val moved: Boolean get() = drag?.moved == true || widgetDrag?.moved == true
 
-    fun start(app: AppInfo, area: DragArea, index: Int, position: Offset) {
-        drag = DragState(app, area, index, position)
+    fun start(
+        dragged: Dragged,
+        area: DragArea,
+        index: Int,
+        position: Offset,
+        folderId: String? = null,
+    ) {
+        drag = DragState(dragged, area, index, position, folderId = folderId)
     }
 
     fun move(position: Offset) {
@@ -187,13 +232,13 @@ class IconDragController {
     }
 
     /**
-     * Drops the drag if it is the one [app] at [area]/[index] started. Used when
-     * a gesture is cut short - the icon being disposed, say - so that the
+     * Drops the drag if it is the one [dragged] at [area]/[index] started. Used
+     * when a gesture is cut short - the icon being disposed, say - so that the
      * launcher cannot be left with an icon stuck in the air.
      */
-    fun cancelIf(app: AppInfo, area: DragArea, index: Int) {
+    fun cancelIf(dragged: Dragged, area: DragArea, index: Int) {
         val current = drag ?: return
-        if (current.app.key == app.key && current.area == area && current.index == index) {
+        if (current.dragged.key == dragged.key && current.area == area && current.index == index) {
             drag = null
         }
     }
@@ -295,23 +340,27 @@ internal fun LayoutCoordinates?.rootOf(local: Offset): Offset? =
  * Tap, long press and drag for one icon, wherever it is.
  *
  * The long press is what separates the two kinds of press: letting go without
- * moving asks for the app's actions, and moving hands the icon over to
+ * moving asks for the icon's actions, and moving hands the icon over to
  * [controller] to be carried.
  *
  * The finger is turned into a place on the screen through [coordinatesAt] on
  * every event, so the position stays under the finger when the page it was
  * picked up from slides away underneath it. [boundsAt] is only for the actions
  * card, which sits where the icon is at the moment of the long press.
+ *
+ * [folderId] is the folder the icon came out of, when it came out of one: the
+ * app has to go back to it if the drop does not work out.
  */
 fun Modifier.iconGesture(
-    app: AppInfo,
+    dragged: Dragged,
     area: DragArea,
     index: Int,
     controller: IconDragController,
     handlers: IconGestureHandlers,
     coordinatesAt: () -> LayoutCoordinates?,
     boundsAt: () -> Rect,
-): Modifier = pointerInput(app.key, area, index) {
+    folderId: String? = null,
+): Modifier = pointerInput(dragged.key, area, index, folderId) {
     // The fallback keeps an icon that has just been detached (and so cannot be
     // converted) from being dropped somewhere arbitrary.
     fun at(local: Offset): Offset =
@@ -325,17 +374,17 @@ fun Modifier.iconGesture(
             val up = waitForUpOrCancellation()
             if (up != null) {
                 up.consume()
-                handlers.onTap(app)
+                handlers.onTap(dragged, area)
             }
             return@awaitEachGesture
         }
 
         longPress.consume()
-        controller.start(app, area, index, at(longPress.position))
+        controller.start(dragged, area, index, at(longPress.position), folderId)
 
         // The actions are asked for as soon as the press is long enough, the way
         // One UI shows them, rather than when the finger comes up.
-        handlers.onLongPress(app, area, index, boundsAt())
+        handlers.onLongPress(dragged, area, index, boundsAt())
 
         try {
             var traveled = 0f
@@ -371,7 +420,7 @@ fun Modifier.iconGesture(
         } finally {
             // Covers the case where the gesture is cancelled rather than let
             // go: without this the icon would stay in the air for good.
-            controller.cancelIf(app, area, index)
+            controller.cancelIf(dragged, area, index)
         }
     }
 }
@@ -509,16 +558,17 @@ fun DraggableIcon(
     labelColor: Color? = null,
     labelShadow: Boolean = false,
     badgeCount: Int = 0,
+    folderId: String? = null,
 ) {
     // The icon's place, as a layout to convert through rather than as a rect
     // copied out of one: the page it sits on slides away under the finger
     // during a drag, and only the live conversion follows it. The rect is kept
     // as well, because the actions card is put up where the icon is at the
     // moment of the long press.
-    var coordinates by remember(app.key, area, index) {
+    var coordinates by remember(app.key, area, index, folderId) {
         mutableStateOf<LayoutCoordinates?>(null)
     }
-    var bounds by remember(app.key, area, index) { mutableStateOf(Rect.Zero) }
+    var bounds by remember(app.key, area, index, folderId) { mutableStateOf(Rect.Zero) }
 
     AppIconTileContent(
         app = app,
@@ -529,13 +579,14 @@ fun DraggableIcon(
                 bounds = it.boundsInRoot()
             }
             .iconGesture(
-                app = app,
+                dragged = Dragged.App(app),
                 area = area,
                 index = index,
                 controller = controller,
                 handlers = handlers,
                 coordinatesAt = { coordinates },
                 boundsAt = { bounds },
+                folderId = folderId,
             ),
         iconSize = iconSize,
         showLabel = showLabel,
@@ -551,6 +602,9 @@ fun DraggableIcon(
  * It is drawn by the launcher rather than by a page, so it stays visible when
  * the page it was picked up from slides away. [origin] is where that layer sits
  * in root coordinates.
+ *
+ * [content] draws the thing being carried when it is not an app: a folder is
+ * carried as the folder it is, not as one of the apps in it.
  */
 @Composable
 fun DragOverlay(
@@ -558,8 +612,10 @@ fun DragOverlay(
     icon: ImageBitmap?,
     iconSize: Dp,
     origin: Offset,
+    content: (@Composable () -> Unit)? = null,
 ) {
     val half = with(LocalDensity.current) { iconSize.toPx() / 2f }
+    val app = drag.app
 
     Box(
         modifier = Modifier
@@ -571,7 +627,11 @@ fun DragOverlay(
             }
             .alpha(0.9f),
     ) {
-        AppIconImage(icon = icon, label = drag.app.label, size = iconSize)
+        if (content != null) {
+            content()
+        } else if (app != null) {
+            AppIconImage(icon = icon, label = app.label, size = iconSize)
+        }
     }
 }
 

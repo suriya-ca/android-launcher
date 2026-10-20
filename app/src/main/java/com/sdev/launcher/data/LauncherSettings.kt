@@ -106,10 +106,17 @@ data class LauncherSettings(
     /** [AppInfo.key]s of apps that stay installed but hidden from the drawer. */
     val hiddenApps: Set<String> = emptySet(),
     /**
-     * Home screen cells: cell index to [AppInfo.key]. Missing cells are empty.
-     * Cells are numbered across every page - see [HOME_SLOT_CAPACITY].
+     * Home screen cells: cell index to what the cell holds - an app, or a
+     * folder of apps. Missing cells are empty. Cells are numbered across every
+     * page - see [HOME_SLOT_CAPACITY].
      */
-    val homeItems: Map<Int, String> = emptyMap(),
+    val homeItems: Map<Int, HomeItem> = emptyMap(),
+    /**
+     * The folders on the home screen, by id. A folder is held by one cell of
+     * [homeItems] and keeps the apps in it here, so a folder can be moved
+     * about without moving its contents.
+     */
+    val folders: Map<String, Folder> = emptyMap(),
     /** How many home screen pages there are, swiped through left to right. */
     val homePages: Int = 1,
     /**
@@ -126,10 +133,72 @@ data class LauncherSettings(
     /** The grid the home screen is laid out on. */
     val grid: HomeGrid get() = HomeGrid(rows = homeRows, columns = homeColumns)
 
-    /** The cell holding [key], if it is on the home screen at all. */
-    fun cellOf(key: String): Pair<HomeArea, Int>? =
-        homeItems.entries.firstOrNull { it.value == key }?.let { HomeArea.HOME to it.key }
-            ?: dockItems.entries.firstOrNull { it.value == key }?.let { HomeArea.DOCK to it.key }
+    /**
+     * The cell holding [key], if it is on the home screen at all.
+     *
+     * An app inside a folder is on the home screen too, and it is found
+     * through the cell that holds the folder.
+     */
+    fun cellOf(key: String): Pair<HomeArea, Int>? {
+        homeItems.entries
+            .firstOrNull { (_, item) -> (item as? HomeItem.App)?.key == key }
+            ?.let { return HomeArea.HOME to it.key }
+
+        homeItems.entries
+            .firstOrNull { (_, item) ->
+                item is HomeItem.Folder && folders[item.id]?.appKeys?.contains(key) == true
+            }
+            ?.let { return HomeArea.HOME to it.key }
+
+        return dockItems.entries.firstOrNull { it.value == key }?.let { HomeArea.DOCK to it.key }
+    }
+
+    /**
+     * The folder holding [key], if the app is in one.
+     */
+    fun folderOf(key: String): Folder? = folders.values.firstOrNull { key in it.appKeys }
+
+    /**
+     * True when the app [key] is on the screen somewhere: in a cell, in a
+     * folder, or in the dock.
+     */
+    fun holdsApp(key: String): Boolean =
+        homeItems.values.any { (it as? HomeItem.App)?.key == key } ||
+            folders.values.any { key in it.appKeys } ||
+            dockItems.containsValue(key)
+
+    /**
+     * The keys of every app that is on the screen, wherever it is.
+     */
+    val pinnedAppKeys: Set<String> = buildSet {
+        homeItems.values.forEach { item ->
+            when (item) {
+                is HomeItem.App -> add(item.key)
+                is HomeItem.Folder -> Unit
+            }
+        }
+        folders.values.forEach { folder -> addAll(folder.appKeys) }
+        addAll(dockItems.values)
+    }
+
+    /**
+     * Where the app [key] is on the screen, if it is anywhere.
+     *
+     * An app is in one place at a time, so this is the answer to where a drop
+     * has to take it from - whichever copy was picked up.
+     */
+    fun placeOf(key: String): AppPlace? {
+        homeItems.entries.firstOrNull { (it.value as? HomeItem.App)?.key == key }
+            ?.let { return AppPlace.Home(it.key) }
+
+        folders.values.firstOrNull { key in it.appKeys }
+            ?.let { return AppPlace.InFolder(it.id) }
+
+        dockItems.entries.firstOrNull { it.value == key }
+            ?.let { return AppPlace.Dock(it.key) }
+
+        return null
+    }
 
     /** True when [page] holds no icons, so it can be taken away again. */
     fun isEmptyHomePage(page: Int): Boolean {

@@ -174,7 +174,10 @@ class WidgetPlacementTest {
     fun `the home screen knows which page holds something`() {
         val perPage = grid.cellCount
         val settings = LauncherSettings(
-            homeItems = mapOf(0 to "app.a", perPage + 1 to "app.b"),
+            homeItems = mapOf(
+                0 to HomeItem.App("app.a"),
+                perPage + 1 to HomeItem.App("app.b"),
+            ),
             homePages = 2,
             widgets = mapOf(
                 perPage * 2 to WidgetPlacement(5, provider, perPage * 2, 1, 1),
@@ -190,7 +193,7 @@ class WidgetPlacementTest {
     fun `a page holding only a widget is not empty`() {
         val perPage = grid.cellCount
         val settings = LauncherSettings(
-            homeItems = mapOf(0 to "app.a"),
+            homeItems = mapOf(0 to HomeItem.App("app.a")),
             homePages = 2,
             widgets = mapOf(perPage to WidgetPlacement(5, provider, perPage, 1, 1)),
         )

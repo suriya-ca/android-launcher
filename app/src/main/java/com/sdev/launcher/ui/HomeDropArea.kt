@@ -87,6 +87,15 @@ class HomeDropArea {
     var scale: Float by mutableFloatStateOf(1f)
 
     /**
+     * Where the open folder's card is on the screen.
+     *
+     * The card is over the home screen, and a place under it is not a place
+     * the home screen can be dropped on: the folder is what is being dropped
+     * on there.
+     */
+    var folderCard: Rect? by mutableStateOf(null)
+
+    /**
      * The cell of the home screen [position] is over, or null when it is over
      * none.
      *
@@ -102,6 +111,10 @@ class HomeDropArea {
     fun cellAt(position: Offset, allowAbove: Boolean = true): Int? {
         val local = gridPoint(position) ?: return null
         val layout = grid ?: return null
+
+        // A place under the open folder is not a place the home screen can be
+        // dropped on: the folder is what is there.
+        if (folderCard?.contains(position) == true) return null
 
         return cellInGrid(
             local = local,

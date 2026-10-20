@@ -41,6 +41,7 @@ fun AppActionCard(
     onAddToDock: (() -> Unit)? = null,
     onEditHome: (() -> Unit)? = null,
     onRemove: (() -> Unit)? = null,
+    onRemoveFromFolder: (() -> Unit)? = null,
     removeLabel: String? = null,
     showUninstall: Boolean = true,
 ) {
@@ -76,6 +77,13 @@ fun AppActionCard(
             )
         }
 
+        if (onRemoveFromFolder != null) {
+            OneUiAction(
+                glyph = Glyph.REMOVE,
+                label = stringResource(R.string.folder_remove_from_folder),
+                onClick = onRemoveFromFolder,
+            )
+        }
         if (onRemove != null) {
             OneUiAction(
                 glyph = Glyph.REMOVE,
@@ -120,5 +128,63 @@ fun AppActionCard(
                 tint = MaterialTheme.colorScheme.error,
             )
         }
+    }
+}
+
+/**
+ * The actions for a folder: what it is called, and how to get rid of it.
+ *
+ * The apps in a folder are not touched by removing the folder: they are left
+ * installed and go back to being apps in the drawer.
+ */
+@Composable
+fun FolderActionCard(
+    folder: FolderEntry?,
+    icons: Map<String, ImageBitmap>,
+    anchor: Rect,
+    onDismiss: () -> Unit,
+    onRename: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    OneUiPopup(anchor = anchor, onDismiss = onDismiss) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            FolderPreviewIcon(
+                apps = folder?.apps.orEmpty(),
+                icons = icons,
+                size = 34.dp,
+            )
+
+            Spacer(Modifier.width(14.dp))
+
+            Text(
+                text = folder?.label ?: stringResource(R.string.folder_default_name),
+                style = MaterialTheme.typography.titleMedium.copy(
+                    fontWeight = FontWeight.SemiBold,
+                ),
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+
+        Spacer(Modifier.height(2.dp))
+
+        OneUiAction(
+            glyph = Glyph.RENAME,
+            label = stringResource(R.string.folder_rename),
+            onClick = onRename,
+        )
+
+        OneUiAction(
+            glyph = Glyph.REMOVE,
+            label = stringResource(R.string.folder_remove),
+            onClick = onRemove,
+            tint = MaterialTheme.colorScheme.error,
+        )
     }
 }

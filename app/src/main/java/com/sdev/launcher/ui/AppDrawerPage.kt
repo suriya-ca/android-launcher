@@ -315,7 +315,7 @@ private fun Modifier.drawerTile(): Modifier = clip(RoundedCornerShape(16.dp))
  * something different in each layout and the app does not.
  */
 private fun IconDragController.carries(app: AppInfo): Boolean =
-    drag?.let { it.area == DragArea.DRAWER && it.app.key == app.key } == true
+    drag?.let { it.area == DragArea.DRAWER && it.app?.key == app.key } == true
 
 @Composable
 private fun CenteredMessage(text: String) {

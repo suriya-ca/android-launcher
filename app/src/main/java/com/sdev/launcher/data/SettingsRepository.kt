@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -31,6 +32,8 @@ class SettingsRepository(context: Context) {
     val settings: Flow<LauncherSettings> = dataStore.data.map { prefs ->
         val dockCount = dockSlotsOf(prefs)
         val pages = homePages(prefs)
+        val layout = homeLayoutOf(prefs)
+
         LauncherSettings(
             drawerColumns = (prefs[KEY_DRAWER_COLUMNS] ?: LauncherSettings.DEFAULT_DRAWER_COLUMNS)
                 .coerceIn(3, 6),
@@ -51,7 +54,8 @@ class SettingsRepository(context: Context) {
             enableT9Search = prefs[KEY_ENABLE_T9_SEARCH] ?: false,
             swipeDownNotifications = prefs[KEY_SWIPE_NOTIFICATIONS] ?: true,
             hiddenApps = prefs[KEY_HIDDEN_APPS].orEmpty(),
-            homeItems = homeItemsOf(prefs),
+            homeItems = layout.cells,
+            folders = layout.folders,
             homePages = pages,
             mainHomePage = mainHomePage(prefs),
             widgets = widgetsOf(prefs),
@@ -122,43 +126,219 @@ class SettingsRepository(context: Context) {
     }
 
     /**
-     * Moves the icon at [fromArea]/[fromIndex] to [toArea]/[toIndex], swapping
-     * whatever was there back into the hole it leaves behind.
+     * Puts the app [key] on the home screen cell [cell], taking it from
+     * wherever it was.
+     *
+     * What the cell was holding decides what happens: an empty cell takes the
+     * app, an app makes a folder of the two, and a folder takes the app in.
+     *
+     * [from] says where the app was, so that it can be taken off there: the
+     * drawer, a home cell, a dock slot, or a folder.
+     *
+     * Returns the cell the app ended up on, or null when nothing happened.
      */
-    suspend fun moveHomeItem(
-        fromArea: HomeArea,
-        fromIndex: Int,
-        toArea: HomeArea,
-        toIndex: Int,
-    ) = mutateSlots { _, _, home, dock, _ ->
-        val fromMap = if (fromArea == HomeArea.HOME) home else dock
-        val toMap = if (toArea == HomeArea.HOME) home else dock
-        val moving = fromMap[fromIndex] ?: return@mutateSlots
+    suspend fun dropAppOnCell(key: String, cell: Int, from: AppPlace): Int? {
+        var landed: Int? = null
 
-        fromMap[fromIndex] = toMap[toIndex] ?: ""
-        toMap[toIndex] = moving
+        mutateSlots { _, _, home, folders, dock, _ ->
+            val layout = HomeLayout(home, folders)
+            val target = layout.cells[cell]
+
+            // Dropping an app on the cell it is already in does nothing: it
+            // must not be made into a folder of itself.
+            if (target is HomeItem.App && target.key == key) return@mutateSlots
+
+            // The app is on the home screen now, so it is not in the dock as
+            // well: an app is in one place at a time.
+            if (from is AppPlace.Dock) {
+                dock.remove(from.slot)
+            } else {
+                dock.entries.firstOrNull { it.value == key }?.let { dock.remove(it.key) }
+            }
+
+            val updated = layout
+                .withoutAppAt(from, key)
+                .withAppDroppedOnCell(key, cell, newFolderId())
+
+            home.clear()
+            home.putAll(updated.cells)
+            folders.clear()
+            folders.putAll(updated.folders)
+            landed = cell
+        }
+
+        return landed
     }
 
     /**
-     * Moves the icon at [fromIndex] on the home screen into the dock, near
-     * [preferred] when that slot is free and into the nearest free one when it
-     * is not. The home cell is left empty; nothing already in the dock moves.
+     * Puts the app [key] in the dock, taking it from wherever it was.
      *
-     * Returns the dock slot the icon landed in, or null when the dock is full.
+     * The dock holds apps only. An app that is already in the dock trades
+     * places with the one under the finger, which is how the dock has always
+     * been rearranged; an app from anywhere else goes into the nearest free
+     * slot, so that nothing already there is thrown out.
+     *
+     * Returns the dock slot the app landed in, or null when the dock is full
+     * and there was nowhere for it to go.
      */
-    suspend fun moveHomeItemToDock(fromIndex: Int, preferred: Int?): Int? {
-        var placed: Int? = null
+    suspend fun dropAppInDock(key: String, slot: Int?, from: AppPlace): Int? {
+        var landed: Int? = null
 
-        mutateSlots { _, dockCapacity, home, dock, _ ->
-            placed = moveHomeCellToDock(home, dock, fromIndex, dockCapacity, preferred)
+        mutateSlots { _, dockCapacity, home, folders, dock, _ ->
+            if (from is AppPlace.Dock) {
+                // Two apps in the dock trade places.
+                val wanted = slot ?: return@mutateSlots
+                if (from.slot == wanted) return@mutateSlots
+
+                val moving = dock.remove(from.slot) ?: return@mutateSlots
+                val displaced = dock[wanted]
+                if (displaced == null) dock.remove(wanted) else dock[wanted] = displaced
+                dock[from.slot] = moving
+
+                landed = wanted
+                return@mutateSlots
+            }
+
+            val target = findFreeCell(dock.keys.toSet(), dockCapacity, slot) ?: return@mutateSlots
+
+            val layout = HomeLayout(home, folders)
+            val cleared = layout.withoutAppAt(from, key)
+
+            home.clear()
+            home.putAll(cleared.cells)
+            folders.clear()
+            folders.putAll(cleared.folders)
+            dock[target] = key
+            landed = target
         }
 
-        return placed
+        return landed
     }
 
+    /**
+     * Moves the folder [folderId] to the home screen cell [cell].
+     *
+     * What the cell was holding decides what happens: an empty cell takes the
+     * folder, an app joins the folder, and another folder is merged into it.
+     *
+     * Returns the cell the folder ended up on.
+     */
+    suspend fun dropFolderOnHomeCell(folderId: String, cell: Int): Int? {
+        var landed: Int? = null
+
+        mutateSlots { _, _, home, folders, _, _ ->
+            val layout = HomeLayout(home, folders)
+            if (layout.cellOfFolder(folderId) == null) return@mutateSlots
+
+            val updated = layout.withFolderDroppedOnCell(folderId, cell)
+            home.clear()
+            home.putAll(updated.cells)
+            folders.clear()
+            folders.putAll(updated.folders)
+            landed = cell
+        }
+
+        return landed
+    }
+
+    /**
+     * Moves the app at [from] inside the folder [folderId] to [to], so that
+     * the apps in a folder can be put in a different order.
+     */
+    suspend fun moveFolderApp(folderId: String, from: Int, to: Int) =
+        mutateSlots { _, _, home, folders, _, _ ->
+            val updated = HomeLayout(home, folders).withFolderMemberMoved(folderId, from, to)
+            home.clear()
+            home.putAll(updated.cells)
+            folders.clear()
+            folders.putAll(updated.folders)
+        }
+
+    /** Calls the folder [folderId] [name]. */
+    suspend fun renameFolder(folderId: String, name: String) =
+        mutateSlots { _, _, home, folders, _, _ ->
+            val updated = HomeLayout(home, folders).withFolderNamed(folderId, name)
+            home.clear()
+            home.putAll(updated.cells)
+            folders.clear()
+            folders.putAll(updated.folders)
+        }
+
+    /**
+     * Takes the folder [folderId] off the home screen. The apps in it are left
+     * installed and go back to being apps in the drawer.
+     */
+    suspend fun removeFolder(folderId: String) =
+        mutateSlots { _, _, home, folders, _, _ ->
+            val updated = HomeLayout(home, folders).withoutFolder(folderId)
+            home.clear()
+            home.putAll(updated.cells)
+            folders.clear()
+            folders.putAll(updated.folders)
+        }
+
+    /**
+     * Takes the app [key] out of the folder [folderId] and puts it on the home
+     * screen near the folder, so that it is still on the screen and is simply
+     * not in the folder any more.
+     *
+     * Returns the cell it landed on, or null when the home screen had no room
+     * and the app went back to being an app in the drawer.
+     */
+    suspend fun removeAppFromFolder(folderId: String, key: String): Int? {
+        var landed: Int? = null
+
+        mutateSlots { grid, _, home, folders, _, widgets ->
+            val layout = HomeLayout(home, folders)
+            val folder = layout.folders[folderId] ?: return@mutateSlots
+            if (key !in folder.appKeys) return@mutateSlots
+
+            val cleared = layout.withoutAppInFolder(folderId, key)
+            val near = cleared.cellOfFolder(folderId) ?: cleared.cellOfApp(key)
+            val occupied = cleared.cells.keys + widgets.values.flatMap { it.cellsIn(grid) }
+            val cell = findFreeCell(occupied.toSet(), grid.capacity, near)
+
+            val updated = if (cell == null) cleared else cleared.withAppAt(key, cell)
+            home.clear()
+            home.putAll(updated.cells)
+            folders.clear()
+            folders.putAll(updated.folders)
+            landed = cell
+        }
+
+        return landed
+    }
+
+    /**
+     * Takes the app [key] out of the folder [folderId] and off the home screen
+     * altogether: it goes back to being an app in the drawer.
+     */
+    suspend fun unpinFolderApp(folderId: String, key: String) =
+        mutateSlots { _, _, home, folders, _, _ ->
+            val layout = HomeLayout(home, folders)
+            val folder = layout.folders[folderId] ?: return@mutateSlots
+            if (key !in folder.appKeys) return@mutateSlots
+
+            val cleared = layout.withoutAppInFolder(folderId, key)
+            home.clear()
+            home.putAll(cleared.cells)
+            folders.clear()
+            folders.putAll(cleared.folders)
+        }
+
     /** Empties one home screen cell. */
-    suspend fun clearHomeItem(area: HomeArea, index: Int) = mutateSlots { _, _, home, dock, _ ->
-        if (area == HomeArea.HOME) home.remove(index) else dock.remove(index)
+    suspend fun clearHomeItem(area: HomeArea, index: Int) = mutateSlots { _, _, home, folders, dock, _ ->
+        when (area) {
+            HomeArea.HOME -> {
+                val folder = (home[index] as? HomeItem.Folder)?.id
+                home.remove(index)
+                // A folder that is taken off the screen goes with it: the apps
+                // in it are left installed, in the drawer.
+                if (folder != null) folders.remove(folder)
+            }
+
+            HomeArea.DOCK -> dock.remove(index)
+        }
     }
 
     /**
@@ -178,9 +358,14 @@ class SettingsRepository(context: Context) {
     ): Int? {
         var placed: Int? = null
 
-        mutateSlots { grid, dockCapacity, home, dock, widgets ->
-            val map = if (area == HomeArea.HOME) home else dock
-            if (map.containsValue(key)) return@mutateSlots
+        mutateSlots { grid, dockCapacity, home, folders, dock, widgets ->
+            val already = if (area == HomeArea.HOME) {
+                home.values.any { (it as? HomeItem.App)?.key == key } ||
+                    folders.values.any { key in it.appKeys }
+            } else {
+                dock.containsValue(key)
+            }
+            if (already) return@mutateSlots
 
             val capacity = if (area == HomeArea.HOME) {
                 (pages * grid.cellCount).coerceIn(grid.cellCount, grid.capacity)
@@ -190,14 +375,18 @@ class SettingsRepository(context: Context) {
 
             // Cells a widget covers are not places an icon can go.
             val occupied = if (area == HomeArea.HOME) {
-                map.keys + widgets.values.flatMap { it.cellsIn(grid) }
+                home.keys + widgets.values.flatMap { it.cellsIn(grid) }
             } else {
-                map.keys.toSet()
+                dock.keys.toSet()
             }
 
             val slot = findFreeCell(occupied, capacity, preferred)
             if (slot != null) {
-                map[slot] = key
+                if (area == HomeArea.HOME) {
+                    home[slot] = HomeItem.App(key)
+                } else {
+                    dock[slot] = key
+                }
                 placed = slot
             }
         }
@@ -220,7 +409,7 @@ class SettingsRepository(context: Context) {
         val home = homeItemsOf(prefs)
         val widgets = widgetsOf(prefs)
 
-        prefs[KEY_HOME_ITEMS] = encodeSlots(shiftCellsFrom(home, first, grid.cellCount))
+        prefs[KEY_HOME_ITEMS] = encodeHomeItems(shiftCellsFrom(home, first, grid.cellCount))
         prefs[KEY_WIDGETS] = encodeWidgets(
             shiftCellsFrom(widgets, first, grid.cellCount).mapValues { (cell, widget) ->
                 widget.at(cell)
@@ -257,7 +446,10 @@ class SettingsRepository(context: Context) {
             val after = grid.firstCellOfPage(page + 1)
             val gone = shiftCellsFrom(widgets.filterKeys { it !in cells }, after, -grid.cellCount)
 
-            prefs[KEY_HOME_ITEMS] = encodeSlots(shiftCellsFrom(before, after, -grid.cellCount))
+            val shifted = shiftCellsFrom(before, after, -grid.cellCount)
+            prefs[KEY_HOME_ITEMS] = encodeHomeItems(shifted)
+            // A folder that was on the page that went goes with it.
+            prefs[KEY_FOLDERS] = encodeFolders(liveFolders(foldersOf(prefs), shifted))
             prefs[KEY_WIDGETS] = encodeWidgets(
                 gone.mapValues { (cell, widget) -> widget.at(cell) },
             )
@@ -319,7 +511,7 @@ class SettingsRepository(context: Context) {
 
             val cells = candidate.cellsIn(grid)
             if (cells.any { it in home }) return@mutateWidgets
-            if (widgets.values.any { it.cell != from && it.cellsIn(grid).any { cell -> cell in cells } }) {
+            if (widgets.values.any { it.hostId != widget.hostId && it.cellsIn(grid).any { cell -> cell in cells } }) {
                 return@mutateWidgets
             }
 
@@ -380,14 +572,33 @@ class SettingsRepository(context: Context) {
             .forEach { widgets.remove(it.key) }
     }
 
-    /** Forgets home screen cells whose app is no longer installed. */
-    suspend fun pruneHomeItems(installed: Set<String>) = mutateSlots { _, _, home, dock, _ ->
-        val stale = { map: MutableMap<Int, String> ->
-            map.entries.filter { it.value.isNotEmpty() && it.value !in installed }
-                .forEach { map.remove(it.key) }
+    /**
+     * Forgets home screen cells whose app is no longer installed, and the apps
+     * in folders that have gone the same way. A folder left with nothing in it
+     * goes too.
+     */
+    suspend fun pruneHomeItems(installed: Set<String>) = mutateSlots { _, _, home, folders, dock, _ ->
+        dock.entries
+            .filter { it.value.isNotEmpty() && it.value !in installed }
+            .forEach { dock.remove(it.key) }
+
+        home.entries
+            .filter { (_, item) -> item is HomeItem.App && item.key !in installed }
+            .forEach { home.remove(it.key) }
+
+        folders.values.toList().forEach { folder ->
+            val remaining = folder.appKeys.filter { it in installed }
+            if (remaining.size != folder.appKeys.size) {
+                if (remaining.isEmpty()) {
+                    folders.remove(folder.id)
+                    home.entries
+                        .filter { (_, item) -> (item as? HomeItem.Folder)?.id == folder.id }
+                        .forEach { home.remove(it.key) }
+                } else {
+                    folders[folder.id] = folder.copy(appKeys = remaining)
+                }
+            }
         }
-        stale(home)
-        stale(dock)
     }
 
     /**
@@ -400,21 +611,26 @@ class SettingsRepository(context: Context) {
         block: (
             grid: HomeGrid,
             dockCapacity: Int,
-            home: MutableMap<Int, String>,
+            home: MutableMap<Int, HomeItem>,
+            folders: MutableMap<String, Folder>,
             dock: MutableMap<Int, String>,
             widgets: Map<Int, WidgetPlacement>,
         ) -> Unit,
     ) = write { prefs ->
-        val home = homeItemsOf(prefs).toMutableMap()
+        val layout = homeLayoutOf(prefs)
+        val home = layout.cells.toMutableMap()
+        val folders = layout.folders.toMutableMap()
         val dockCapacity = dockSlotsOf(prefs)
         val dock = decodeSlots(prefs[KEY_DOCK_ITEMS], dockCapacity).toMutableMap()
         val widgets = widgetsOf(prefs)
         val homeBefore = home.toString()
+        val foldersBefore = folders.toString()
         val dockBefore = dock.toString()
 
-        block(gridOf(prefs), dockCapacity, home, dock, widgets)
+        block(gridOf(prefs), dockCapacity, home, folders, dock, widgets)
 
-        if (home.toString() != homeBefore) prefs[KEY_HOME_ITEMS] = encodeSlots(home)
+        if (home.toString() != homeBefore) prefs[KEY_HOME_ITEMS] = encodeHomeItems(home)
+        if (folders.toString() != foldersBefore) prefs[KEY_FOLDERS] = encodeFolders(folders)
         if (dock.toString() != dockBefore) prefs[KEY_DOCK_ITEMS] = encodeSlots(dock)
     }
 
@@ -450,7 +666,7 @@ class SettingsRepository(context: Context) {
      * back if they changed.
      */
     private suspend fun mutateWidgets(
-        block: (grid: HomeGrid, home: Map<Int, String>, widgets: MutableMap<Int, WidgetPlacement>) -> Unit,
+        block: (grid: HomeGrid, home: Map<Int, HomeItem>, widgets: MutableMap<Int, WidgetPlacement>) -> Unit,
     ) = write { prefs ->
         val home = homeItemsOf(prefs)
         val widgets = widgetsOf(prefs).toMutableMap()
@@ -491,20 +707,48 @@ class SettingsRepository(context: Context) {
         HomeGrid(rows = homeRowsOf(prefs), columns = homeColumnsOf(prefs))
 
     /**
+     * The home screen as it is: the cells, and the folders they point at.
+     *
+     * A folder whose cell is no longer there - because the grid changed and
+     * the cell did not fit any more - is not a folder any more, and is left
+     * out.
+     */
+    private fun homeLayoutOf(prefs: Preferences): HomeLayout {
+        val items = homeItemsOf(prefs)
+        return HomeLayout(items, liveFolders(foldersOf(prefs), items))
+    }
+
+    /**
      * The home screen cells in the file, numbered as the grid in use numbers
      * them.
      */
-    private fun homeItemsOf(prefs: Preferences): Map<Int, String> {
+    private fun homeItemsOf(prefs: Preferences): Map<Int, HomeItem> {
         val storedR = storedRows(prefs)
         val storedC = storedColumns(prefs)
 
         return remapHomeCells(
-            items = decodeSlots(prefs[KEY_HOME_ITEMS], HomeGrid(rows = storedR, columns = storedC).capacity),
+            items = decodeHomeItems(
+                prefs[KEY_HOME_ITEMS],
+                HomeGrid(rows = storedR, columns = storedC).capacity,
+            ),
             fromRows = storedR,
             toRows = homeRowsOf(prefs),
             fromColumns = storedC,
             toColumns = homeColumnsOf(prefs),
         )
+    }
+
+    /** The folders in the file. */
+    private fun foldersOf(prefs: Preferences): Map<String, Folder> =
+        decodeFolders(prefs[KEY_FOLDERS])
+
+    /** The folders that are still on the screen: one whose cell has gone is not. */
+    private fun liveFolders(
+        folders: Map<String, Folder>,
+        items: Map<Int, HomeItem>,
+    ): Map<String, Folder> {
+        val onScreen = items.values.filterIsInstance<HomeItem.Folder>().map { it.id }.toSet()
+        return folders.filterKeys { it in onScreen }
     }
 
     /** The widgets in the file, numbered as the grid in use numbers them. */
@@ -524,11 +768,11 @@ class SettingsRepository(context: Context) {
 
     /** The height of the grid the cells in the file were numbered on. */
     private fun storedRows(prefs: Preferences): Int =
-        prefs[KEY_GRID_ROWS] ?: LauncherSettings.LEGACY_HOME_ROWS
+        prefs[KEY_HOME_ROWS] ?: LauncherSettings.LEGACY_HOME_ROWS
 
     /** The width of the grid the cells in the file were numbered on. */
     private fun storedColumns(prefs: Preferences): Int =
-        prefs[KEY_GRID_COLUMNS] ?: LauncherSettings.LEGACY_HOME_COLUMNS
+        prefs[KEY_HOME_COLUMNS] ?: LauncherSettings.LEGACY_HOME_COLUMNS
 
     /**
      * Writes the cells in the file in the numbering of the grid in use, with
@@ -539,7 +783,7 @@ class SettingsRepository(context: Context) {
     private fun renumberCells(prefs: MutablePreferences): List<Int> {
         val rows = homeRowsOf(prefs)
         val columns = homeColumnsOf(prefs)
-        if (prefs[KEY_GRID_ROWS] == rows && prefs[KEY_GRID_COLUMNS] == columns) return emptyList()
+        if (prefs[KEY_HOME_ROWS] == rows && prefs[KEY_HOME_COLUMNS] == columns) return emptyList()
 
         val storedR = storedRows(prefs)
         val storedC = storedColumns(prefs)
@@ -552,10 +796,14 @@ class SettingsRepository(context: Context) {
             toColumns = columns,
         )
 
-        prefs[KEY_HOME_ITEMS] = encodeSlots(homeItemsOf(prefs))
+        val items = homeItemsOf(prefs)
+        prefs[KEY_HOME_ITEMS] = encodeHomeItems(items)
+        // A folder whose cell did not survive the change is not on the screen
+        // any more, and is not written down.
+        prefs[KEY_FOLDERS] = encodeFolders(liveFolders(foldersOf(prefs), items))
         prefs[KEY_WIDGETS] = encodeWidgets(refit.widgets)
-        prefs[KEY_GRID_ROWS] = rows
-        prefs[KEY_GRID_COLUMNS] = columns
+        prefs[KEY_HOME_ROWS] = rows
+        prefs[KEY_HOME_COLUMNS] = columns
 
         return refit.dropped
     }
@@ -564,6 +812,9 @@ class SettingsRepository(context: Context) {
         key: Preferences.Key<String>,
         fallback: T,
     ): T = this[key]?.let { stored -> enumValues<T>().firstOrNull { it.name == stored } } ?: fallback
+
+    /** A name for a folder that has not been given one. */
+    private fun newFolderId(): String = UUID.randomUUID().toString()
 
     private companion object {
         val KEY_DRAWER_COLUMNS = intPreferencesKey("drawer_columns")
@@ -579,12 +830,18 @@ class SettingsRepository(context: Context) {
         val KEY_SWIPE_NOTIFICATIONS = booleanPreferencesKey("swipe_notifications")
         val KEY_HIDDEN_APPS = stringSetPreferencesKey("hidden_apps")
         val KEY_HOME_ITEMS = stringPreferencesKey("home_items")
+        val KEY_FOLDERS = stringPreferencesKey("home_folders")
         val KEY_HOME_PAGES = intPreferencesKey("home_pages")
         val KEY_MAIN_HOME_PAGE = intPreferencesKey("main_home_page")
 
-        /** How many rows the home screen grid has. */
-        val KEY_HOME_ROWS = intPreferencesKey("home_rows")
-        val KEY_HOME_COLUMNS = intPreferencesKey("home_columns")
+        /**
+         * How many rows the grid in use has, and how many columns.
+         *
+         * The file is written down in the numbering of the grid in use, and
+         * this is where that numbering is kept.
+         */
+        val KEY_HOME_ROWS = intPreferencesKey("grid_rows")
+        val KEY_HOME_COLUMNS = intPreferencesKey("grid_columns")
 
         val KEY_WIDGETS = stringPreferencesKey("widget_items")
         val KEY_DOCK_ITEMS = stringPreferencesKey("dock_items")
@@ -592,9 +849,5 @@ class SettingsRepository(context: Context) {
         val KEY_SHOW_DOCK = booleanPreferencesKey("show_dock")
         val KEY_SHOW_NOTIFICATION_BADGES = booleanPreferencesKey("show_notification_badges")
         val KEY_ENABLE_T9_SEARCH = booleanPreferencesKey("enable_t9_search")
-
-        /** The size of the grid the stored cells were numbered on. */
-        val KEY_GRID_ROWS = intPreferencesKey("grid_rows")
-        val KEY_GRID_COLUMNS = intPreferencesKey("grid_columns")
     }
 }
