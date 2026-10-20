@@ -42,9 +42,6 @@
     <string name="widget_unavailable">This widget is no longer available</string>
     <string name="dock_full">The dock is full</string>
     <string name="shade_unavailable">Turn on the notifications gesture in Launcher settings</string>
-    <string name="set_default_home">Set as default home app</string>
-    <string name="already_default_home">This app is already your home app</string>
-    <string name="default_home_hint">Tap to make this your home screen</string>
 
     <string name="settings_title">Launcher settings</string>
     <string name="settings_appearance">Appearance</string>
@@ -114,4 +111,31 @@
 
     <string name="settings_about">About</string>
     <string name="settings_version">Version %1$s</string>
+
+    <string name="settings_dock">Dock</string>
+    <string name="settings_show_dock">Show dock</string>
+    <string name="settings_show_dock_hint">Show the pinned dock bar at the bottom</string>
+    <string name="settings_dock_slots">Dock icon count</string>
+    <string name="settings_dock_slots_hint">Maximum icons the dock bar holds</string>
+    <plurals name="settings_slots_count">
+        <item quantity="one">%1$d icon</item>
+        <item quantity="other">%1$d icons</item>
+    </plurals>
+
+    <string name="settings_home_columns">Grid columns</string>
+    <string name="settings_home_columns_hint">How many columns of apps a page holds</string>
+    <plurals name="settings_columns_count">
+        <item quantity="one">%1$d column</item>
+        <item quantity="other">%1$d columns</item>
+    </plurals>
+
+    <string name="settings_badges">Notification badges</string>
+    <string name="settings_show_badges">App icon badges</string>
+    <string name="settings_show_badges_hint">Show dots or count on apps with unread notifications</string>
+    <string name="settings_badges_permission">Notification access</string>
+    <string name="settings_badges_permission_hint">Grant permission to show notification badges</string>
+    <string name="notification_service_label">Notification Badges</string>
+
+    <string name="settings_t9_search">T9 keypad search</string>
+    <string name="settings_t9_search_hint">Quick search using phone dialer letters in the drawer</string>
 </resources>

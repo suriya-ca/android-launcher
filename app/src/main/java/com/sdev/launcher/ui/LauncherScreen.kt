@@ -5,6 +5,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.app.Activity
 import android.content.Context
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -37,6 +38,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
@@ -55,32 +58,29 @@ import kotlinx.coroutines.launch
 
 private const val HOME_PAGE = 0
 private const val DRAWER_PAGE = 1
-private const val WIDGETS_PAGE = 2
-private const val PAGE_COUNT = 3
+private const val PAGE_COUNT = 2
 
 /**
  * How far the user has to drag before the launcher moves to the neighbouring
  * page. The pager's default is half a page, which feels sluggish for a
  * launcher: a short swipe up opens the drawer and a short swipe down closes it
- * again. A short flick is still only allowed to turn one page at a time, so the
- * widget page, two pages away, is reached by swiping again rather than by one
- * throw.
+ * again. A short flick is still only allowed to turn one page at a time.
  */
 private const val SWIPE_THRESHOLD = 0.15f
 
 /**
- * The launcher is three full pages stacked vertically:
+ * The launcher is two full pages stacked vertically:
  *
  *  - page 0 is the home screen: the wallpaper, plus pinned apps and a dock
  *  - page 1 is the app drawer
- *  - page 2 is the widget page: every widget that can be put on the screen
  *
- * Swiping up moves from home to the drawer and on to the widgets, swiping down
- * moves back. Because each is a page rather than an overlay, each is always
- * fullscreen.
+ * Swiping up moves from home to the drawer and swiping down moves back. The
+ * widget page is not one of them: it is a sheet over the launcher, opened by the
+ * button in the home screen's edit mode, so the drawer cannot be swiped on past
+ * into it.
  *
- * An icon can also be picked up in the drawer, and a widget off the widget page,
- * and carried onto the home screen: the drag is owned here rather than by either
+ * An icon can be picked up in the drawer, and a widget off the widget page, and
+ * carried onto the home screen: the drag is owned here rather than by either
  * page, so that it survives the page under the finger changing.
  */
 @Composable
@@ -130,18 +130,31 @@ fun LauncherScreen(
         IconGestureHandlers(
             onTap = { app ->
                 // While the home screen is being rearranged a tap is how the
-                // page under it is chosen, never how an app is opened.
-                if (!viewModel.state.value.editing) viewModel.launch(app)
+                // mode is left, never how an app is opened: the icons and the
+                // wallpaper are one surface there, the way the dim over them
+                // used to make them.
+                if (viewModel.state.value.editing) {
+                    viewModel.setEditing(false)
+                } else {
+                    viewModel.launch(app)
+                }
             },
             onLongPress = { app, area, index, anchor ->
-                // Only an icon that is pinned somewhere can be taken off again.
-                widgetTarget = null
-                actionTarget = ActionTarget(
-                    app = app,
-                    area = if (area == DragArea.DRAWER) null else area,
-                    index = index,
-                    anchor = anchor,
-                )
+                // The card is not offered while the home screen is being
+                // rearranged: the pages are live again behind the dim so they
+                // can be swiped between, and a card over them would take the
+                // swipe. Holding an icon there still picks it up and moves it.
+                if (!viewModel.state.value.editing) {
+                    // Only an icon that is pinned somewhere can be taken off
+                    // again.
+                    widgetTarget = null
+                    actionTarget = ActionTarget(
+                        app = app,
+                        area = if (area == DragArea.DRAWER) null else area,
+                        index = index,
+                        anchor = anchor,
+                    )
+                }
             },
             onDragStart = {
                 actionTarget = null
@@ -178,7 +191,8 @@ fun LauncherScreen(
                     page != null -> viewModel.dropOnPage(drag, page)
 
                     else -> {
-                        val slot = dropArea.dockSlotAt(position, enabled = !editing)
+                        dropArea.dockSlots = state.settings.dockSlots
+                        val slot = if (state.settings.showDock) dropArea.dockSlotAt(position, enabled = !editing) else null
 
                         // Something carried in from another page is on its way
                         // *onto* this one. Let go in the band above the grid -
@@ -247,40 +261,23 @@ fun LauncherScreen(
         onDispose { viewModel.releaseWidgetPreviews() }
     }
 
-    // The ViewModel says which page *should* be showing (used by the Back key,
-    // the widget button and the system Home action)...
-    val targetPage = when {
-        state.drawerOpen -> DRAWER_PAGE
-        state.pickingWidget -> WIDGETS_PAGE
-        else -> HOME_PAGE
-    }
+    // The ViewModel says which page *should* be showing (used by the Back key
+    // and the system Home action)...
+    val targetPage = if (state.drawerOpen) DRAWER_PAGE else HOME_PAGE
 
     LaunchedEffect(targetPage) {
         if (pagerState.currentPage == targetPage) return@LaunchedEffect
 
-        // The drawer is one page from home and slides, which is how it has
-        // always felt. Anything further than that - the widget page, two away -
-        // arrives at once: sliding it would sweep the drawer past on the way,
-        // which reads as having gone somewhere rather than as having gone back.
-        val distance = pagerState.currentPage - targetPage
-        if (distance in -1..1) {
-            pagerState.animateScrollToPage(targetPage)
-        } else {
-            pagerState.scrollToPage(targetPage)
-        }
+        // The two pages are neighbours, so this is always a slide, which is how
+        // a launcher has always felt.
+        pagerState.animateScrollToPage(targetPage)
     }
 
-    // ...and the pager reports back the page the user actually landed on, drawer
-    // and widget page together so that neither is ever briefly off on its own.
+    // ...and the pager reports back the page the user actually landed on.
     LaunchedEffect(pagerState) {
         snapshotFlow { pagerState.settledPage }
             .distinctUntilChanged()
-            .collect { page ->
-                viewModel.setShownPage(
-                    drawerOpen = page == DRAWER_PAGE,
-                    widgetPageOpen = page == WIDGETS_PAGE,
-                )
-            }
+            .collect { page -> viewModel.setDrawerOpen(page == DRAWER_PAGE) }
     }
 
     BackHandler(
@@ -315,14 +312,15 @@ fun LauncherScreen(
     val widgetDrag = dragController.widgetDrag
 
     // Something being carried from a page that is not the home screen: an icon
-    // out of the drawer, or a widget out of the widget page. Both are carried to
-    // the Home target along the top to bring the home screen out for them. A
-    // widget already on the home screen is not one of these - it has a place,
-    // and is being moved rather than brought in.
+    // out of the drawer. It is carried to the Home target along the top to bring
+    // the home screen out for it. A widget already on the home screen is not one
+    // of these - it has a place, and is being moved rather than brought in. A
+    // widget off the widget page is not one either: picking it up takes the page
+    // away, so the home screen is already there under it.
     val drawerCarry = drag?.takeIf { it.area == DragArea.DRAWER && it.moved }
     val widgetCarry = widgetDrag?.takeIf { it.choice != null && it.moved }
 
-    val carriedToHome = drawerCarry?.position ?: widgetCarry?.position
+    val carriedToHome = drawerCarry?.position
 
     val homeArrived = pagerState.currentPage == HOME_PAGE && !pagerState.isScrollInProgress
 
@@ -335,7 +333,7 @@ fun LauncherScreen(
         !homeArrived &&
         carriedToHome.y <= band
 
-    val incoming = drawerCarry != null || widgetCarry != null
+    val incoming = drawerCarry != null
 
     // The pull is acted on in the screen's own scope rather than by the effect
     // that noticed it. The slide takes a moment, and the finger is free to leave
@@ -348,16 +346,7 @@ fun LauncherScreen(
     LaunchedEffect(pullingHome) {
         if (!pullingHome || pagerState.currentPage == HOME_PAGE) return@LaunchedEffect
 
-        pullScope.launch {
-            // The drawer is one page from home, so it slides the way it always
-            // has. The widget page is two away: sliding it would sweep the
-            // drawer past on the way, so the home screen is simply there.
-            if (drawerCarry != null) {
-                pagerState.animateScrollToPage(HOME_PAGE)
-            } else {
-                pagerState.scrollToPage(HOME_PAGE)
-            }
-        }
+        pullScope.launch { pagerState.animateScrollToPage(HOME_PAGE) }
     }
 
     // A preview belongs to the widget being stretched: when the selection goes,
@@ -433,14 +422,16 @@ fun LauncherScreen(
     ) {
         VerticalPager(
             state = pagerState,
-            // Every page stays composed: an icon can be dragged out of the page
-            // that is sliding away, a widget off the widget page two away, and
-            // the home screen has to keep being told where it is while that
-            // happens - it is the home screen that owns the geometry a drop is
-            // worked out from, and it cannot do that while it is not composed.
-            beyondViewportPageCount = 2,
+            // The home screen has to keep being told where it is while the
+            // drawer slides over it - it is the home screen that owns the
+            // geometry a drop is worked out from, and it cannot tell anyone
+            // anything while it is not composed. Two pages means the one next
+            // door is always composed; that is enough for an icon dragged out of
+            // the drawer, since it is only ever one page away.
+            beyondViewportPageCount = 1,
             // Dragging an icon must not also drag the pager, and neither must
-            // the home screen while it is being rearranged.
+            // the home screen while it is being rearranged: turning its pages is
+            // a sideways swipe, and the drawer is not where that is going.
             userScrollEnabled = !dragController.active && !state.editing,
             flingBehavior = PagerDefaults.flingBehavior(
                 state = pagerState,
@@ -480,25 +471,43 @@ fun LauncherScreen(
                     onRevealShown = viewModel::onRevealShown,
                 )
 
-                DRAWER_PAGE -> AppDrawerPage(
+                else -> AppDrawerPage(
                     state = state,
                     controller = dragController,
                     handlers = gestures,
                     isActive = pagerState.settledPage == DRAWER_PAGE,
                     onQueryChange = viewModel::onQueryChange,
                 )
+            }
+        }
 
-                else -> WidgetPage(
+        // The widget page is a sheet over the launcher rather than a page of it,
+        // so the drawer cannot be swiped on into it: it is reached by the button
+        // in the home screen's edit mode, and by nothing else.
+        //
+        // Picking a widget up takes the sheet away - the home screen is what the
+        // widget is being aimed at, and having to carry it over the sheet to get
+        // there would be carrying it over the thing that is in the way. It is
+        // only hidden, though, not composed away: the gesture being followed is
+        // the card's, and disposing the page under the finger would tear it out
+        // from under it. A drop that lands nowhere brings the sheet back.
+        if (state.pickingWidget) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { alpha = if (widgetCarry != null) 0f else 1f }
+                    // The sheet is over the pages rather than one of them, so
+                    // the parts of it that are not a card - the gaps around the
+                    // header, the space below the last row - have to hold the
+                    // touch themselves. Without anything here a drag on one
+                    // would turn the pages underneath, out of sight. What a tap
+                    // on one does is nothing.
+                    .pointerInput(Unit) { detectTapGestures { } },
+            ) {
+                WidgetPage(
                     groups = viewModel.widgetGroups(),
                     host = viewModel.widgetHost,
                     controller = dragController,
-                    // Taken from the ViewModel rather than from the page the
-                    // pager has settled on: the page is asked for before the
-                    // pager moves to it, and asking for it is what a fresh visit
-                    // is. Waiting for the pager to arrive would leave the last
-                    // visit's cards - and the ids they were drawn under, since
-                    // handed back - on the screen while it slid in.
-                    active = state.pickingWidget,
                     onPick = { choice -> viewModel.chooseWidget(choice) },
                     onDragStart = {
                         actionTarget = null
@@ -510,10 +519,15 @@ fun LauncherScreen(
             }
         }
 
-        // The dim that says a card is up, or that the home screen is being
-        // rearranged. It is drawn over the pages so a tap that misses the card
-        // puts it away rather than reaching the icon behind it.
-        if (actionTarget != null || widgetTarget != null || state.editing) {
+        // The dim that says a card is up. It is drawn over the pages so a tap
+        // that misses the card puts it away rather than reaching the icon behind
+        // it.
+        //
+        // Edit mode has a dim too, but it is not this one: [OneUiDim] has no
+        // pointer input, so the pages under it stay live and can be swiped
+        // between while the home screen is being rearranged. What a tap should do
+        // there is the home screen's own business, and it already knows.
+        if (actionTarget != null || widgetTarget != null) {
             OneUiScrim(
                 onDismiss = {
                     actionTarget = null
@@ -525,6 +539,8 @@ fun LauncherScreen(
                     }
                 },
             )
+        } else if (state.editing) {
+            OneUiDim()
         }
 
         // The edit mode's own furniture goes above that dim: a tap on the page
@@ -535,6 +551,7 @@ fun LauncherScreen(
                 pages = state.settings.homePages,
                 currentPage = state.homePage,
                 rows = state.settings.grid.rows,
+                columns = state.settings.grid.columns,
                 canAddPage = state.settings.homePages < LauncherSettings.HOME_PAGE_LIMIT,
                 cellsOnPage = { page ->
                     val cells = state.settings.grid.cellsOfPage(page)
@@ -679,7 +696,9 @@ fun LauncherScreen(
             app = target.app,
             icon = state.icons[target.app.key],
             anchor = target.anchor,
-            onDismiss = { actionTarget = null },
+            onDismiss = {
+                actionTarget = null
+            },
             onAppInfo = {
                 viewModel.openAppInfo(target.app)
                 actionTarget = null

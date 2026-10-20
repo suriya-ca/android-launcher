@@ -299,22 +299,22 @@ class HomeSlotsTest {
     fun `cells are renumbered when the home screen gains rows`() {
         // Three rows down on the second page, where the older grid held 24 cells
         // to a page and the newer one holds more.
-        val perOldPage = LauncherSettings.HOME_COLUMNS * LauncherSettings.LEGACY_HOME_ROWS
+        val perOldPage = LauncherSettings.DEFAULT_HOME_COLUMNS * LauncherSettings.LEGACY_HOME_ROWS
 
         assertEquals(
-            LauncherSettings.HOME_COLUMNS * LauncherSettings.HOME_ROWS + 2 * LauncherSettings.HOME_COLUMNS,
-            remapHomeCell(perOldPage + 2 * LauncherSettings.HOME_COLUMNS, 6, LauncherSettings.HOME_ROWS),
+            LauncherSettings.DEFAULT_HOME_COLUMNS * LauncherSettings.HOME_ROWS + 2 * LauncherSettings.DEFAULT_HOME_COLUMNS,
+            remapHomeCell(perOldPage + 2 * LauncherSettings.DEFAULT_HOME_COLUMNS, 6, LauncherSettings.HOME_ROWS),
         )
 
         // Every page keeps its own place, and its own place within the page.
         val old = mapOf(0 to "a", 5 to "b", perOldPage to "c", perOldPage + 7 to "d")
         val new = remapHomeCells(old, LauncherSettings.LEGACY_HOME_ROWS, LauncherSettings.HOME_ROWS)
-        val perNewPage = LauncherSettings.HOME_COLUMNS * LauncherSettings.HOME_ROWS
+        val perNewPage = LauncherSettings.DEFAULT_HOME_COLUMNS * LauncherSettings.HOME_ROWS
 
         assertEquals("a", new[0])
         assertEquals("b", new[5])
         assertEquals("c", new[perNewPage])
-        assertEquals("d", new[perNewPage + LauncherSettings.HOME_COLUMNS + 3])
+        assertEquals("d", new[perNewPage + LauncherSettings.DEFAULT_HOME_COLUMNS + 3])
     }
 
     @Test
@@ -322,11 +322,11 @@ class HomeSlotsTest {
         // Going the other way - a grid that lost rows - has nowhere to put the
         // bottom of a page, and such a cell is quietly left out rather than
         // landing somewhere it was never dropped.
-        assertNull(remapHomeCell(5 * LauncherSettings.HOME_COLUMNS, 8, 4))
+        assertNull(remapHomeCell(5 * LauncherSettings.DEFAULT_HOME_COLUMNS, 8, 4))
         assertEquals(
             mapOf(0 to "a"),
             remapHomeCells(
-                mapOf(0 to "a", 5 * LauncherSettings.HOME_COLUMNS to "b"),
+                mapOf(0 to "a", 5 * LauncherSettings.DEFAULT_HOME_COLUMNS to "b"),
                 8,
                 4,
             ),

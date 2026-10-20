@@ -77,6 +77,7 @@ fun HomeEditMode(
     pages: Int,
     currentPage: Int,
     rows: Int,
+    columns: Int = LauncherSettings.DEFAULT_HOME_COLUMNS,
     canAddPage: Boolean,
     cellsOnPage: (Int) -> Set<Int>,
     onSelectPage: (Int) -> Unit,
@@ -130,6 +131,7 @@ fun HomeEditMode(
                 PageThumbnail(
                     occupied = cellsOnPage(page),
                     rows = rows,
+                    columns = columns,
                     current = page == currentPage,
                     // Any page but the last can be taken away, and everything on
                     // it goes with it. The home screen always has a page to show.
@@ -240,6 +242,7 @@ private fun RemovePageDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
 private fun PageThumbnail(
     occupied: Set<Int>,
     rows: Int,
+    columns: Int = LauncherSettings.DEFAULT_HOME_COLUMNS,
     current: Boolean,
     removable: Boolean,
     onTap: () -> Unit,
@@ -268,7 +271,7 @@ private fun PageThumbnail(
             },
         contentAlignment = Alignment.Center,
     ) {
-        PageMiniature(occupied = occupied, rows = rows)
+        PageMiniature(occupied = occupied, rows = rows, columns = columns)
 
         if (removable) {
             Box(
@@ -296,6 +299,7 @@ private fun PageThumbnail(
 internal fun PageMiniature(
     occupied: Set<Int>,
     rows: Int,
+    columns: Int = LauncherSettings.DEFAULT_HOME_COLUMNS,
     dot: Dp = 7.dp,
     inset: Dp = THUMB_INSET,
     modifier: Modifier = Modifier,
@@ -309,8 +313,8 @@ internal fun PageMiniature(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly,
             ) {
-                repeat(LauncherSettings.HOME_COLUMNS) { column ->
-                    val index = row * LauncherSettings.HOME_COLUMNS + column
+                repeat(columns) { column ->
+                    val index = row * columns + column
                     Box(
                         modifier = Modifier
                             .size(dot)

@@ -61,7 +61,7 @@ import kotlin.math.roundToInt
  * pressed, and the small line glyphs that go in it.
  *
  * The glyphs are drawn rather than taken from an icon font: the launcher needs
- * eight of them, and drawing them keeps the app free of a dependency that would
+ * a handful of them, and drawing them keeps the app free of a dependency that would
  * add more code than the whole launcher.
  */
 
@@ -86,7 +86,6 @@ enum class Glyph {
     WALLPAPER,
     WIDGETS,
     CLOSE,
-    EDIT,
     ARROW_LEFT,
     ARROW_RIGHT,
 }
@@ -99,6 +98,23 @@ fun OneUiScrim(onDismiss: () -> Unit, modifier: Modifier = Modifier) {
             .fillMaxSize()
             .background(Color.Black.copy(alpha = 0.32f))
             .pointerInput(Unit) { detectTapGestures { onDismiss() } },
+    )
+}
+
+/**
+ * The same dim, with nothing of its own to say.
+ *
+ * It darkens what is under it so that what is drawn over it stands out, and
+ * leaves the touch alone - there is no pointer input on it at all, so the pages
+ * below stay live. The edit mode wants this: the home screen behind the dim is
+ * still a page that can be swiped between, where a card wants [OneUiScrim].
+ */
+@Composable
+fun OneUiDim(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.32f)),
     )
 }
 
@@ -342,18 +358,6 @@ private fun DrawScope.drawGlyph(glyph: Glyph, tint: Color) {
         Glyph.CLOSE -> {
             bar(-0.26f, -0.26f, 0.26f, 0.26f)
             bar(0.26f, -0.26f, -0.26f, 0.26f)
-        }
-
-        Glyph.EDIT -> {
-            // A pencil leaning to the right.
-            drawLine(
-                color = tint,
-                start = Offset(centre.x - side * 0.24f, centre.y + side * 0.26f),
-                end = Offset(centre.x + side * 0.26f, centre.y - side * 0.24f),
-                strokeWidth = line,
-                cap = StrokeCap.Round,
-            )
-            bar(-0.3f, 0.34f, -0.16f, 0.2f)
         }
 
         Glyph.ARROW_LEFT -> {

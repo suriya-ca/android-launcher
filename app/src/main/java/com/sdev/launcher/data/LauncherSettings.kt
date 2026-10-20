@@ -46,10 +46,10 @@ enum class HomeArea { HOME, DOCK }
  * piece of cell arithmetic takes a grid, so nothing can quietly assume the
  * height it was first written against.
  */
-data class HomeGrid(val rows: Int) {
-
-    val columns: Int get() = LauncherSettings.HOME_COLUMNS
-
+data class HomeGrid(
+    val rows: Int,
+    val columns: Int = LauncherSettings.DEFAULT_HOME_COLUMNS,
+) {
     /** How many cells one page holds. */
     val cellCount: Int get() = columns * rows
 
@@ -89,8 +89,18 @@ data class LauncherSettings(
     val iconShape: IconShape = IconShape.SYSTEM,
     /** Package name of the icon pack in use, or null for the icons as shipped. */
     val iconPack: String? = null,
+    /** How many columns the home screen grid has. */
+    val homeColumns: Int = DEFAULT_HOME_COLUMNS,
     /** How many rows the home screen grid has. */
     val homeRows: Int = HOME_ROWS,
+    /** How many slots the dock bar holds. */
+    val dockSlots: Int = DEFAULT_DOCK_SLOTS,
+    /** Whether the dock is shown at the bottom of the home screen. */
+    val showDock: Boolean = true,
+    /** Whether app icon notification dots or count badges are displayed. */
+    val showNotificationBadges: Boolean = true,
+    /** Whether T9 numeric dial-pad search is enabled in the app drawer. */
+    val enableT9Search: Boolean = false,
     /** Whether a swipe down on the home screen opens the notification shade. */
     val swipeDownNotifications: Boolean = true,
     /** [AppInfo.key]s of apps that stay installed but hidden from the drawer. */
@@ -108,11 +118,7 @@ data class LauncherSettings(
     val dockItems: Map<Int, String> = emptyMap(),
 ) {
     /** The grid the home screen is laid out on. */
-    val grid: HomeGrid get() = HomeGrid(homeRows)
-
-    /** The key in a home screen cell, or null when the cell is empty. */
-    fun itemAt(area: HomeArea, index: Int): String? =
-        (if (area == HomeArea.HOME) homeItems else dockItems)[index]
+    val grid: HomeGrid get() = HomeGrid(rows = homeRows, columns = homeColumns)
 
     /** The cell holding [key], if it is on the home screen at all. */
     fun cellOf(key: String): Pair<HomeArea, Int>? =
@@ -166,8 +172,11 @@ data class LauncherSettings(
         const val DEFAULT_DRAWER_COLUMNS = 4
         val DRAWER_COLUMN_CHOICES = listOf(4, 5)
 
-        /** How many columns the home screen grid has. */
-        const val HOME_COLUMNS = 4
+        const val DEFAULT_HOME_COLUMNS = 4
+        val HOME_COLUMN_CHOICES = listOf(4, 5)
+
+        const val DEFAULT_DOCK_SLOTS = 5
+        val DOCK_SLOT_CHOICES = listOf(3, 4, 5, 6, 7)
 
         /** The rows the home screen starts with. */
         const val HOME_ROWS = 8
@@ -188,12 +197,9 @@ data class LauncherSettings(
          * already on the home screen stay where the user left them.
          */
         const val LEGACY_HOME_ROWS = 6
-
-        const val DOCK_SLOTS = 5
+        const val LEGACY_HOME_COLUMNS = 4
 
         /** The most home screen pages the launcher will make room for. */
         const val HOME_PAGE_LIMIT = 6
-
-        val ICON_SHAPES = IconShape.entries.toList()
     }
 }

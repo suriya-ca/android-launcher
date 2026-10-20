@@ -9,7 +9,7 @@ default home app it takes over the home screen.
 ## Get it
 
 [**Download the latest APK**](https://github.com/suriya-ca/android-launcher/releases/latest)
-from GitHub Releases — the current release is **v0.2.0**.
+from GitHub Releases — the current release is **v0.2.1**.
 
 Install it, then make it the home app: **Settings → Apps → Default apps → Home
 app**, or use the launcher's own settings.
@@ -23,6 +23,8 @@ app**, or use the launcher's own settings.
 - Drag and drop that lands where you let go — every cell of every page, and the
   dock, for apps and widgets alike
 - Widget hosting, including resize and move
+- An edit mode that keeps the pages swipeable, with the page strip, wallpaper,
+  widgets and settings along the bottom
 
 **App drawer**
 - Pages or list layout
@@ -32,10 +34,10 @@ app**, or use the launcher's own settings.
 
 **Widget page**
 
-A third page, one swipe past the app drawer, that lists every widget the system
-offers, with search. Long-press one to carry it onto the home screen, or tap it
-to place it, and the widget page gives way to home in one step rather than sliding
-the drawer past on the way.
+Reached from the home screen's edit mode, not by swiping: the drawer swipes up
+to nothing. It lists every widget the system offers, with search. Long-press one
+to carry it onto the home screen — the page gets out of the way the moment the
+widget is lifted — or tap it to place it.
 
 **Appearance**
 - Light, dark, or system theme

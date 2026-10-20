@@ -31,7 +31,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -84,11 +83,6 @@ fun WidgetPage(
     groups: List<WidgetGroup>,
     host: WidgetHost,
     controller: IconDragController,
-    /**
-     * True while the page is the one being looked at, which is what makes a
-     * visit a visit: the search is emptied and the cards are drawn afresh.
-     */
-    active: Boolean,
     onPick: (WidgetChoice) -> Unit,
     onDragStart: () -> Unit,
     onDrop: WidgetDropHandler,
@@ -96,24 +90,6 @@ fun WidgetPage(
     modifier: Modifier = Modifier,
 ) {
     var query by remember { mutableStateOf("") }
-
-    // Which visit to the page this is. Every visit draws its cards afresh, which
-    // is what makes the previews work: the ids a visit binds are handed back when
-    // the page is left, but the page itself stays composed - it has to, or a
-    // widget being carried off it would have its gesture torn out from under it
-    // as the pager moved away - so without this the cards would come back holding
-    // ids the host has already let go of, and draw widgets that are no longer
-    // listening.
-    var visit by remember { mutableStateOf(0) }
-
-    LaunchedEffect(active) {
-        if (active) {
-            // A fresh visit starts from the whole list, the way a fresh visit to
-            // the drawer starts from the whole list of apps.
-            query = ""
-            visit++
-        }
-    }
 
     val shown = filterWidgetGroups(groups, query)
 
@@ -145,16 +121,14 @@ fun WidgetPage(
 
                     shown.isEmpty() -> WidgetPageMessage(R.string.widget_no_results)
 
-                    else -> key(visit) {
-                        WidgetGrid(
-                            groups = shown,
-                            host = host,
-                            controller = controller,
-                            onPick = onPick,
-                            onDragStart = onDragStart,
-                            onDrop = onDrop,
-                        )
-                    }
+                    else -> WidgetGrid(
+                        groups = shown,
+                        host = host,
+                        controller = controller,
+                        onPick = onPick,
+                        onDragStart = onDragStart,
+                        onDrop = onDrop,
+                    )
                 }
             }
         }

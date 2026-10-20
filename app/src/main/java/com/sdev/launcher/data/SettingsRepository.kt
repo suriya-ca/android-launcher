@@ -29,6 +29,7 @@ class SettingsRepository(context: Context) {
     private val packageManager = context.applicationContext.packageManager
 
     val settings: Flow<LauncherSettings> = dataStore.data.map { prefs ->
+        val dockCount = dockSlotsOf(prefs)
         LauncherSettings(
             drawerColumns = (prefs[KEY_DRAWER_COLUMNS] ?: LauncherSettings.DEFAULT_DRAWER_COLUMNS)
                 .coerceIn(3, 6),
@@ -41,13 +42,18 @@ class SettingsRepository(context: Context) {
             dynamicColor = prefs[KEY_DYNAMIC_COLOR] ?: true,
             iconShape = prefs.enumOr(KEY_ICON_SHAPE, IconShape.SYSTEM),
             iconPack = prefs[KEY_ICON_PACK]?.takeIf { it.isNotEmpty() },
+            homeColumns = homeColumnsOf(prefs),
+            homeRows = homeRowsOf(prefs),
+            dockSlots = dockCount,
+            showDock = prefs[KEY_SHOW_DOCK] ?: true,
+            showNotificationBadges = prefs[KEY_SHOW_NOTIFICATION_BADGES] ?: true,
+            enableT9Search = prefs[KEY_ENABLE_T9_SEARCH] ?: false,
             swipeDownNotifications = prefs[KEY_SWIPE_NOTIFICATIONS] ?: true,
             hiddenApps = prefs[KEY_HIDDEN_APPS].orEmpty(),
-            homeRows = homeRowsOf(prefs),
             homeItems = homeItemsOf(prefs),
             homePages = homePages(prefs),
             widgets = widgetsOf(prefs),
-            dockItems = decodeSlots(prefs[KEY_DOCK_ITEMS], LauncherSettings.DOCK_SLOTS),
+            dockItems = decodeSlots(prefs[KEY_DOCK_ITEMS], dockCount),
         )
     }
 
@@ -72,6 +78,26 @@ class SettingsRepository(context: Context) {
     suspend fun setIconPack(packageName: String?) =
         write { it[KEY_ICON_PACK] = packageName.orEmpty() }
 
+    suspend fun setShowDock(enabled: Boolean) = write { it[KEY_SHOW_DOCK] = enabled }
+
+    suspend fun setDockSlots(slots: Int) = write { prefs ->
+        val validSlots = slots.coerceIn(
+            LauncherSettings.DOCK_SLOT_CHOICES.first(),
+            LauncherSettings.DOCK_SLOT_CHOICES.last(),
+        )
+        prefs[KEY_DOCK_SLOTS] = validSlots
+        // Trim any dock items that exceed the new capacity
+        val current = decodeSlots(prefs[KEY_DOCK_ITEMS], LauncherSettings.DOCK_SLOT_CHOICES.last())
+        val trimmed = current.filterKeys { it in 0 until validSlots }
+        prefs[KEY_DOCK_ITEMS] = encodeSlots(trimmed)
+    }
+
+    suspend fun setShowNotificationBadges(enabled: Boolean) =
+        write { it[KEY_SHOW_NOTIFICATION_BADGES] = enabled }
+
+    suspend fun setEnableT9Search(enabled: Boolean) =
+        write { it[KEY_ENABLE_T9_SEARCH] = enabled }
+
     suspend fun setSwipeDownNotifications(enabled: Boolean) =
         write { it[KEY_SWIPE_NOTIFICATIONS] = enabled }
 
@@ -80,15 +106,8 @@ class SettingsRepository(context: Context) {
         prefs[KEY_HIDDEN_APPS] = if (hidden) current + key else current - key
     }
 
-    /**
-     * Gives the home screen a grid of [rows] rows and says which widgets there
-     * was nowhere left for, so that the system can be told to let go of them.
-     *
-     * Everything else keeps its place: cells are renumbered as the file is
-     * written, and a widget that the shorter grid cannot hold where it was is
-     * carried to the nearest place on its own page that it does fit.
-     */
-    suspend fun setHomeRows(rows: Int): List<Int> = writeAndRelease { prefs ->
+    suspend fun setHomeGrid(columns: Int, rows: Int): List<Int> = writeAndRelease { prefs ->
+        prefs[KEY_HOME_COLUMNS] = columns.coerceIn(4, 5)
         prefs[KEY_HOME_ROWS] = rows.coerceIn(
             LauncherSettings.HOME_MIN_ROWS,
             LauncherSettings.HOME_MAX_ROWS,
@@ -104,7 +123,7 @@ class SettingsRepository(context: Context) {
         fromIndex: Int,
         toArea: HomeArea,
         toIndex: Int,
-    ) = mutateSlots { _, home, dock, _ ->
+    ) = mutateSlots { _, _, home, dock, _ ->
         val fromMap = if (fromArea == HomeArea.HOME) home else dock
         val toMap = if (toArea == HomeArea.HOME) home else dock
         val moving = fromMap[fromIndex] ?: return@mutateSlots
@@ -114,7 +133,7 @@ class SettingsRepository(context: Context) {
     }
 
     /** Empties one home screen cell. */
-    suspend fun clearHomeItem(area: HomeArea, index: Int) = mutateSlots { _, home, dock, _ ->
+    suspend fun clearHomeItem(area: HomeArea, index: Int) = mutateSlots { _, _, home, dock, _ ->
         if (area == HomeArea.HOME) home.remove(index) else dock.remove(index)
     }
 
@@ -135,14 +154,14 @@ class SettingsRepository(context: Context) {
     ): Int? {
         var placed: Int? = null
 
-        mutateSlots { grid, home, dock, widgets ->
+        mutateSlots { grid, dockCapacity, home, dock, widgets ->
             val map = if (area == HomeArea.HOME) home else dock
             if (map.containsValue(key)) return@mutateSlots
 
             val capacity = if (area == HomeArea.HOME) {
                 (pages * grid.cellCount).coerceIn(grid.cellCount, grid.capacity)
             } else {
-                LauncherSettings.DOCK_SLOTS
+                dockCapacity
             }
 
             // Cells a widget covers are not places an icon can go.
@@ -348,7 +367,7 @@ class SettingsRepository(context: Context) {
     }
 
     /** Forgets home screen cells whose app is no longer installed. */
-    suspend fun pruneHomeItems(installed: Set<String>) = mutateSlots { _, home, dock, _ ->
+    suspend fun pruneHomeItems(installed: Set<String>) = mutateSlots { _, _, home, dock, _ ->
         val stale = { map: MutableMap<Int, String> ->
             map.entries.filter { it.value.isNotEmpty() && it.value !in installed }
                 .forEach { map.remove(it.key) }
@@ -366,19 +385,20 @@ class SettingsRepository(context: Context) {
     private suspend fun mutateSlots(
         block: (
             grid: HomeGrid,
+            dockCapacity: Int,
             home: MutableMap<Int, String>,
             dock: MutableMap<Int, String>,
             widgets: Map<Int, WidgetPlacement>,
         ) -> Unit,
     ) = write { prefs ->
         val home = homeItemsOf(prefs).toMutableMap()
-        val dock = decodeSlots(prefs[KEY_DOCK_ITEMS], LauncherSettings.DOCK_SLOTS)
-            .toMutableMap()
+        val dockCapacity = dockSlotsOf(prefs)
+        val dock = decodeSlots(prefs[KEY_DOCK_ITEMS], dockCapacity).toMutableMap()
         val widgets = widgetsOf(prefs)
         val homeBefore = home.toString()
         val dockBefore = dock.toString()
 
-        block(gridOf(prefs), home, dock, widgets)
+        block(gridOf(prefs), dockCapacity, home, dock, widgets)
 
         if (home.toString() != homeBefore) prefs[KEY_HOME_ITEMS] = encodeSlots(home)
         if (dock.toString() != dockBefore) prefs[KEY_DOCK_ITEMS] = encodeSlots(dock)
@@ -427,6 +447,12 @@ class SettingsRepository(context: Context) {
         if (widgets.toString() != before) prefs[KEY_WIDGETS] = encodeWidgets(widgets)
     }
 
+    private fun dockSlotsOf(prefs: Preferences): Int =
+        (prefs[KEY_DOCK_SLOTS] ?: LauncherSettings.DEFAULT_DOCK_SLOTS).coerceIn(
+            LauncherSettings.DOCK_SLOT_CHOICES.first(),
+            LauncherSettings.DOCK_SLOT_CHOICES.last(),
+        )
+
     /** How many home screen pages exist, within the launcher's limits. */
     private fun homePages(prefs: Preferences): Int =
         (prefs[KEY_HOME_PAGES] ?: 1).coerceIn(1, LauncherSettings.HOME_PAGE_LIMIT)
@@ -438,43 +464,53 @@ class SettingsRepository(context: Context) {
             LauncherSettings.HOME_MAX_ROWS,
         )
 
+    /** How many columns the grid in use has. */
+    private fun homeColumnsOf(prefs: Preferences): Int =
+        (prefs[KEY_HOME_COLUMNS] ?: LauncherSettings.DEFAULT_HOME_COLUMNS).coerceIn(4, 5)
+
     /** The grid the launcher is working on. */
-    private fun gridOf(prefs: Preferences): HomeGrid = HomeGrid(homeRowsOf(prefs))
+    private fun gridOf(prefs: Preferences): HomeGrid =
+        HomeGrid(rows = homeRowsOf(prefs), columns = homeColumnsOf(prefs))
 
     /**
      * The home screen cells in the file, numbered as the grid in use numbers
      * them.
-     *
-     * The grid's height is the user's to change and has changed on its own once
-     * before, and cells are numbered across the pages, so what is in the file may
-     * still be counted on the older grid. Every read goes through here, which is
-     * what keeps the things on the home screen in the places the user left them.
      */
     private fun homeItemsOf(prefs: Preferences): Map<Int, String> {
-        val stored = storedRows(prefs)
+        val storedR = storedRows(prefs)
+        val storedC = storedColumns(prefs)
 
         return remapHomeCells(
-            decodeSlots(prefs[KEY_HOME_ITEMS], HomeGrid(stored).capacity),
-            stored,
-            homeRowsOf(prefs),
+            items = decodeSlots(prefs[KEY_HOME_ITEMS], HomeGrid(rows = storedR, columns = storedC).capacity),
+            fromRows = storedR,
+            toRows = homeRowsOf(prefs),
+            fromColumns = storedC,
+            toColumns = homeColumnsOf(prefs),
         )
     }
 
     /** The widgets in the file, numbered as the grid in use numbers them. */
     private fun widgetsOf(prefs: Preferences): Map<Int, WidgetPlacement> {
-        val stored = storedRows(prefs)
+        val storedR = storedRows(prefs)
+        val storedC = storedColumns(prefs)
 
         return refitWidgets(
-            widgets = decodeWidgets(HomeGrid(stored), prefs[KEY_WIDGETS]),
+            widgets = decodeWidgets(HomeGrid(rows = storedR, columns = storedC), prefs[KEY_WIDGETS]),
             icons = homeItemsOf(prefs).keys,
-            fromRows = stored,
+            fromRows = storedR,
             toRows = homeRowsOf(prefs),
+            fromColumns = storedC,
+            toColumns = homeColumnsOf(prefs),
         ).widgets
     }
 
     /** The height of the grid the cells in the file were numbered on. */
     private fun storedRows(prefs: Preferences): Int =
         prefs[KEY_GRID_ROWS] ?: LauncherSettings.LEGACY_HOME_ROWS
+
+    /** The width of the grid the cells in the file were numbered on. */
+    private fun storedColumns(prefs: Preferences): Int =
+        prefs[KEY_GRID_COLUMNS] ?: LauncherSettings.LEGACY_HOME_COLUMNS
 
     /**
      * Writes the cells in the file in the numbering of the grid in use, with
@@ -484,19 +520,24 @@ class SettingsRepository(context: Context) {
      */
     private fun renumberCells(prefs: MutablePreferences): List<Int> {
         val rows = homeRowsOf(prefs)
-        if (prefs[KEY_GRID_ROWS] == rows) return emptyList()
+        val columns = homeColumnsOf(prefs)
+        if (prefs[KEY_GRID_ROWS] == rows && prefs[KEY_GRID_COLUMNS] == columns) return emptyList()
 
-        val stored = storedRows(prefs)
+        val storedR = storedRows(prefs)
+        val storedC = storedColumns(prefs)
         val refit = refitWidgets(
-            widgets = decodeWidgets(HomeGrid(stored), prefs[KEY_WIDGETS]),
+            widgets = decodeWidgets(HomeGrid(rows = storedR, columns = storedC), prefs[KEY_WIDGETS]),
             icons = homeItemsOf(prefs).keys,
-            fromRows = stored,
+            fromRows = storedR,
             toRows = rows,
+            fromColumns = storedC,
+            toColumns = columns,
         )
 
         prefs[KEY_HOME_ITEMS] = encodeSlots(homeItemsOf(prefs))
         prefs[KEY_WIDGETS] = encodeWidgets(refit.widgets)
         prefs[KEY_GRID_ROWS] = rows
+        prefs[KEY_GRID_COLUMNS] = columns
 
         return refit.dropped
     }
@@ -524,11 +565,17 @@ class SettingsRepository(context: Context) {
 
         /** How many rows the home screen grid has. */
         val KEY_HOME_ROWS = intPreferencesKey("home_rows")
+        val KEY_HOME_COLUMNS = intPreferencesKey("home_columns")
 
         val KEY_WIDGETS = stringPreferencesKey("widget_items")
         val KEY_DOCK_ITEMS = stringPreferencesKey("dock_items")
+        val KEY_DOCK_SLOTS = intPreferencesKey("dock_slots")
+        val KEY_SHOW_DOCK = booleanPreferencesKey("show_dock")
+        val KEY_SHOW_NOTIFICATION_BADGES = booleanPreferencesKey("show_notification_badges")
+        val KEY_ENABLE_T9_SEARCH = booleanPreferencesKey("enable_t9_search")
 
-        /** The height of the grid the stored cells were numbered on. */
+        /** The size of the grid the stored cells were numbered on. */
         val KEY_GRID_ROWS = intPreferencesKey("grid_rows")
+        val KEY_GRID_COLUMNS = intPreferencesKey("grid_columns")
     }
 }

@@ -30,7 +30,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.toSize
-import com.sdev.launcher.data.LauncherSettings
 import com.sdev.launcher.data.ResizeEdge
 import com.sdev.launcher.data.WidgetPlacement
 import com.sdev.launcher.data.resized

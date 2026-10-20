@@ -34,6 +34,8 @@ data class SettingsUiState(
     val packIcons: Map<String, ImageBitmap> = emptyMap(),
     /** Whether the notifications gesture has been allowed in the system settings. */
     val shadeEnabled: Boolean = false,
+    /** Whether notification listener access is granted for badges. */
+    val notificationPermissionGranted: Boolean = false,
 )
 
 /**
@@ -75,6 +77,13 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch { settingsRepository.setDrawerColumns(columns) }
     }
 
+    fun setHomeColumns(columns: Int) {
+        viewModelScope.launch {
+            val rows = _state.value.settings.homeRows
+            widgetHost.releaseIds(settingsRepository.setHomeGrid(columns, rows))
+        }
+    }
+
     /**
      * Gives the home screen a grid of [rows] rows.
      *
@@ -84,8 +93,26 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
      */
     fun setHomeRows(rows: Int) {
         viewModelScope.launch {
-            widgetHost.releaseIds(settingsRepository.setHomeRows(rows))
+            val cols = _state.value.settings.homeColumns
+            widgetHost.releaseIds(settingsRepository.setHomeGrid(cols, rows))
         }
+    }
+
+    fun setShowDock(show: Boolean) {
+        viewModelScope.launch { settingsRepository.setShowDock(show) }
+    }
+
+    fun setDockSlots(slots: Int) {
+        viewModelScope.launch { settingsRepository.setDockSlots(slots) }
+    }
+
+    fun setShowNotificationBadges(show: Boolean) {
+        viewModelScope.launch { settingsRepository.setShowNotificationBadges(show) }
+        refreshNotificationPermission()
+    }
+
+    fun setEnableT9Search(enabled: Boolean) {
+        viewModelScope.launch { settingsRepository.setEnableT9Search(enabled) }
     }
 
     fun setDrawerStyle(style: DrawerStyle) {
@@ -137,6 +164,12 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun refreshShadeState() {
         val enabled = NotificationShadeService.isEnabled(getApplication())
         _state.update { it.copy(shadeEnabled = enabled) }
+        refreshNotificationPermission()
+    }
+
+    fun refreshNotificationPermission() {
+        val granted = com.sdev.launcher.service.LauncherNotificationListenerService.isEnabled(getApplication())
+        _state.update { it.copy(notificationPermissionGranted = granted) }
     }
 
     /**

@@ -61,9 +61,9 @@ class HomePagesTest {
         LauncherSettings.HOME_ROW_CHOICES.forEach { rows ->
             val shape = HomeGrid(rows)
 
-            assertEquals(LauncherSettings.HOME_COLUMNS, shape.columns)
+            assertEquals(LauncherSettings.DEFAULT_HOME_COLUMNS, shape.columns)
             assertEquals(rows, shape.rows)
-            assertEquals(LauncherSettings.HOME_COLUMNS * rows, shape.cellCount)
+            assertEquals(LauncherSettings.DEFAULT_HOME_COLUMNS * rows, shape.cellCount)
             assertEquals(LauncherSettings.HOME_PAGE_LIMIT * shape.cellCount, shape.capacity)
 
             // Page 1 begins where page 0 ends, whatever the height.

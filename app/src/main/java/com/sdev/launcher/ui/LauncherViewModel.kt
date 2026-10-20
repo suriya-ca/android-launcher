@@ -120,6 +120,8 @@ data class LauncherUiState(
      * while the drawer was open becomes visible.
      */
     val revealCell: Pair<HomeArea, Int>? = null,
+    /** Notification counts mapped by package name for unread icon badges. */
+    val notificationCounts: Map<String, Int> = emptyMap(),
 ) {
     /**
      * [apps] with hidden ones removed, narrowed by the drawer's search field
@@ -127,9 +129,8 @@ data class LauncherUiState(
      */
     val visibleApps: List<AppInfo>
         get() {
-            val trimmed = query.trim()
             val filtered = listedApps.filter { app ->
-                trimmed.isEmpty() || app.label.contains(trimmed, ignoreCase = true)
+                SearchMatcher.matches(app, query, enableT9 = settings.enableT9Search)
             }
             return when (settings.sortOrder) {
                 // The repository already delivers apps A-Z.
@@ -201,6 +202,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 if (needsIcons(previous, settings)) reloadIcons()
             }
         }
+        viewModelScope.launch {
+            com.sdev.launcher.service.LauncherNotificationListenerService.notificationCounts.collect { counts ->
+                _state.update { it.copy(notificationCounts = counts) }
+            }
+        }
     }
 
     /**
@@ -257,8 +263,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    /** Called when the system Home action arrives while we are already showing. */
+    /**
+     * Called when the system Home action arrives while we are already showing.
+     *
+     * Home means the home screen itself, so whatever was over it - the drawer,
+     * the widget page, edit mode - is put away.
+     */
     fun onHomeRequested() {
+        closeWidgetPage()
         setDrawerOpen(false)
         _state.update { it.copy(editing = false, selectedWidget = NO_WIDGET) }
     }
@@ -267,22 +279,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun setHomePage(page: Int) {
         _state.update { current ->
             if (current.homePage == page) current else current.copy(homePage = page)
-        }
-    }
-
-    /**
-     * Makes room beside the page being looked at. A page added on the left
-     * pushes what was on screen along with it, so the user keeps looking at the
-     * same icons and the new page is the one before them.
-     */
-    fun addHomePage(toLeft: Boolean) {
-        val settings = _state.value.settings
-        if (settings.homePages >= LauncherSettings.HOME_PAGE_LIMIT) return
-
-        val current = _state.value.homePage
-        viewModelScope.launch {
-            settingsRepository.insertHomePage(if (toLeft) current else current + 1)
-            if (toLeft) _state.update { it.copy(homePage = current + 1) }
         }
     }
 
@@ -580,11 +576,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     /**
      * Opens the widget page, with the widgets that can go on the home screen.
      *
-     * Reached both from the button in edit mode and from the pager on settling
-     * there, so a page asked for and a page swiped to come through the same
-     * door. Already being open is left alone, which is what keeps the previews
-     * from being bound a second time as the pager reports the page it has just
-     * arrived at.
+     * The button in the home screen's edit mode is the only way in: the page is
+     * a sheet over the launcher rather than a page of the stack the drawer lives
+     * in, so it cannot be swiped to by accident. Already being open is left
+     * alone, which keeps the previews from being bound a second time.
      */
     fun openWidgetPage() {
         if (_state.value.pickingWidget) return
@@ -607,21 +602,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
         widgetHost.releasePreviews()
         _state.update { it.copy(pickingWidget = false) }
-    }
-
-    /**
-     * Where the user has settled. The pager runs the pages, so the pager is what
-     * says which one is showing, and the rest of the launcher follows.
-     *
-     * The drawer is taken first: the two are set one after the other, and an
-     * instant with neither of them true is an instant with the home screen asked
-     * for, which on the way out of the widget page would send the pager off to
-     * the wrong end of the stack.
-     */
-    fun setShownPage(drawerOpen: Boolean, widgetPageOpen: Boolean) {
-        setDrawerOpen(drawerOpen)
-
-        if (widgetPageOpen) openWidgetPage() else closeWidgetPage()
     }
 
     /**

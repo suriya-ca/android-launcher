@@ -80,30 +80,43 @@ fun <T> movePageCells(items: Map<Int, T>, grid: HomeGrid, from: Int, to: Int): M
  * for does not exist on the new grid, which is what a row that has been taken
  * away comes to.
  */
-fun remapHomeCell(cell: Int, fromRows: Int, toRows: Int): Int? {
-    if (cell < 0 || fromRows <= 0 || toRows <= 0) return null
+fun remapHomeCell(
+    cell: Int,
+    fromRows: Int,
+    toRows: Int,
+    fromColumns: Int = LauncherSettings.DEFAULT_HOME_COLUMNS,
+    toColumns: Int = LauncherSettings.DEFAULT_HOME_COLUMNS,
+): Int? {
+    if (cell < 0 || fromRows <= 0 || toRows <= 0 || fromColumns <= 0 || toColumns <= 0) return null
 
-    val columns = LauncherSettings.HOME_COLUMNS
-    val perPage = columns * fromRows
+    val perPage = fromColumns * fromRows
     val page = cell / perPage
     val within = cell % perPage
-    val row = within / columns
-    val column = within % columns
+    val row = within / fromColumns
+    val column = within % fromColumns
 
-    if (row >= toRows) return null
+    if (row >= toRows || column >= toColumns) return null
 
-    return page * columns * toRows + row * columns + column
+    return page * toColumns * toRows + row * toColumns + column
 }
 
 /**
  * [remapHomeCell] over a whole map of cells, dropping the entries that have no
  * place on the new grid.
  */
-fun <T> remapHomeCells(items: Map<Int, T>, fromRows: Int, toRows: Int): Map<Int, T> {
-    if (fromRows == toRows) return items
+fun <T> remapHomeCells(
+    items: Map<Int, T>,
+    fromRows: Int,
+    toRows: Int,
+    fromColumns: Int = LauncherSettings.DEFAULT_HOME_COLUMNS,
+    toColumns: Int = LauncherSettings.DEFAULT_HOME_COLUMNS,
+): Map<Int, T> {
+    if (fromRows == toRows && fromColumns == toColumns) return items
 
     return items.entries
-        .mapNotNull { (cell, value) -> remapHomeCell(cell, fromRows, toRows)?.let { it to value } }
+        .mapNotNull { (cell, value) ->
+            remapHomeCell(cell, fromRows, toRows, fromColumns, toColumns)?.let { it to value }
+        }
         .toMap()
 }
 
@@ -239,11 +252,15 @@ fun refitWidgets(
     icons: Set<Int>,
     fromRows: Int,
     toRows: Int,
+    fromColumns: Int = LauncherSettings.DEFAULT_HOME_COLUMNS,
+    toColumns: Int = LauncherSettings.DEFAULT_HOME_COLUMNS,
 ): WidgetRefit {
-    if (widgets.isEmpty() || fromRows == toRows) return WidgetRefit(widgets, emptyList())
+    if (widgets.isEmpty() || (fromRows == toRows && fromColumns == toColumns)) {
+        return WidgetRefit(widgets, emptyList())
+    }
 
-    val grid = HomeGrid(toRows)
-    val fromPerPage = grid.columns * fromRows
+    val grid = HomeGrid(rows = toRows, columns = toColumns)
+    val fromPerPage = fromColumns * fromRows
     val placed = LinkedHashMap<Int, WidgetPlacement>()
     val dropped = mutableListOf<Int>()
 
@@ -254,7 +271,8 @@ fun refitWidgets(
         val spanY = widget.spanY.coerceIn(1, grid.rows)
         val occupied = icons + placed.values.flatMap { it.cellsIn(grid) }
 
-        val wanted = remapHomeCell(cell, fromRows, toRows) ?: pullIntoGrid(cell, fromRows, toRows)
+        val wanted = remapHomeCell(cell, fromRows, toRows, fromColumns, toColumns)
+            ?: pullIntoGrid(cell, fromRows, toRows, fromColumns, toColumns)
         val page = cell / fromPerPage
         val target = wanted
             .takeIf { widgetFitsGrid(grid, it, spanX, spanY) && widgetCells(grid, it, spanX, spanY).none { c -> c in occupied } }
@@ -285,15 +303,20 @@ fun refitWidgets(
  * it was on than at the top of it: it is the nearest part of the page that is
  * still there.
  */
-fun pullIntoGrid(cell: Int, fromRows: Int, toRows: Int): Int {
-    val columns = LauncherSettings.HOME_COLUMNS
-    val perOldPage = columns * fromRows
+fun pullIntoGrid(
+    cell: Int,
+    fromRows: Int,
+    toRows: Int,
+    fromColumns: Int = LauncherSettings.DEFAULT_HOME_COLUMNS,
+    toColumns: Int = LauncherSettings.DEFAULT_HOME_COLUMNS,
+): Int {
+    val perOldPage = fromColumns * fromRows
     val page = cell / perOldPage
     val within = cell % perOldPage
-    val column = within % columns
-    val row = (within / columns).coerceAtMost(toRows - 1)
+    val column = (within % fromColumns).coerceAtMost(toColumns - 1)
+    val row = (within / fromColumns).coerceAtMost(toRows - 1)
 
-    return page * columns * toRows + row * columns + column
+    return page * toColumns * toRows + row * toColumns + column
 }
 
 /** The system's model of how big one cell is, in dp. */

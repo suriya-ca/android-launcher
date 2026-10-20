@@ -218,8 +218,8 @@ class WidgetPlacementTest {
 
         assertEquals(5, short.grid.rows)
         assertEquals(10, tall.grid.rows)
-        assertEquals(LauncherSettings.HOME_COLUMNS * 5, short.grid.cellCount)
-        assertEquals(LauncherSettings.HOME_COLUMNS * 10, tall.grid.cellCount)
+        assertEquals(LauncherSettings.DEFAULT_HOME_COLUMNS * 5, short.grid.cellCount)
+        assertEquals(LauncherSettings.DEFAULT_HOME_COLUMNS * 10, tall.grid.cellCount)
     }
 
     @Test

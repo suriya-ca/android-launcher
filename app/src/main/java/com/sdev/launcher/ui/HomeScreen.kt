@@ -11,7 +11,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -27,7 +26,6 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -70,7 +68,6 @@ import com.sdev.launcher.data.WidgetPlacement
 import com.sdev.launcher.data.findNearestWidgetCell
 import com.sdev.launcher.data.widgetCells
 import kotlin.math.abs
-import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 
@@ -143,7 +140,6 @@ fun HomeScreen(
     val editing = state.editing
     val editScale = if (editing) EDIT_CONTENT_SCALE else 1f
 
-    var homeOrigin by remember { mutableStateOf(Offset.Zero) }
     var homeSize by remember { mutableStateOf(Size.Zero) }
 
     // Kept as well, so that a tap can be turned from a place within the home
@@ -288,7 +284,6 @@ fun HomeScreen(
             .fillMaxSize()
             .onGloballyPositioned {
                 homeAt = it
-                homeOrigin = it.positionInRoot()
                 homeSize = it.size.toSize()
             }
             // Empty space: a tap puts the widget handles and the edit mode away
@@ -418,6 +413,7 @@ fun HomeScreen(
                             onDrop = onWidgetDrop,
                             revealed = active && state.revealWidget != null,
                             onRevealShown = onWidgetRevealShown,
+                            onEditingTap = onEmptyTap,
                         )
 
                         // Where the thing in the air would land. This is drawn
@@ -446,10 +442,11 @@ fun HomeScreen(
                 )
             }
 
-            if (!editing) {
+            if (!editing && settings.showDock) {
                 HomeDock(
                     state = state,
                     iconSize = iconSize,
+                    dockSlots = settings.dockSlots,
                     controller = controller,
                     handlers = handlers,
                     drag = drag,
@@ -473,9 +470,8 @@ fun HomeScreen(
         }
 
         // The edit mode's own strip and buttons are drawn above the pages, up in
-        // the launcher, so that the dim over the home screen is free to put the
-        // edit mode away on a tap without swallowing the taps that are meant for
-        // them.
+        // the launcher, so that they are never under the menu the pages are
+        // holding open.
 
         // While something is being carried, the pages appear along the bottom so
         // that it can be put down on another one.
@@ -593,7 +589,6 @@ private fun HomeGrid(
                         // it - only the pulse a newly pinned icon leaves behind.
                         outlined = false,
                         highlighted = false,
-                        refused = false,
                         dimmed = held,
                         revealed = active && reveal == Pair(HomeArea.HOME, index),
                         onRevealShown = onRevealShown,
@@ -610,6 +605,7 @@ private fun HomeGrid(
 private fun HomeDock(
     state: LauncherUiState,
     iconSize: Dp,
+    dockSlots: Int,
     controller: IconDragController,
     handlers: IconGestureHandlers,
     drag: DragState?,
@@ -631,7 +627,7 @@ private fun HomeDock(
             .onGloballyPositioned { onBounds(it) },
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        repeat(LauncherSettings.DOCK_SLOTS) { index ->
+        repeat(dockSlots) { index ->
             val held = drag?.let { it.area == DragArea.DOCK && it.index == index } == true
 
             HomeCell(
@@ -646,7 +642,6 @@ private fun HomeDock(
                 // the air and moving, at the same moment as the grid behind them.
                 outlined = controller.moved,
                 highlighted = dropSlot == index,
-                refused = false,
                 dimmed = held,
                 revealed = active && reveal == Pair(HomeArea.DOCK, index),
                 onRevealShown = onRevealShown,
@@ -672,6 +667,7 @@ private fun WidgetLayer(
     onDrop: WidgetDropHandler,
     revealed: Boolean,
     onRevealShown: () -> Unit,
+    onEditingTap: () -> Unit,
 ) {
     val widgets = state.settings.widgets.values
     if (widgets.isEmpty()) return
@@ -728,6 +724,23 @@ private fun WidgetLayer(
                     widgetHost = widgetHost,
                     modifier = Modifier.fillMaxSize(),
                 )
+
+                // In the edit mode a widget is scenery. The screen is live again
+                // behind the dim so that its pages can be swiped between, and
+                // that also means a tap would otherwise reach the widget's own
+                // controls and start music, or open the app it belongs to. The
+                // cover takes the tap and gives it to the mode, which is what
+                // the dim over everything used to do with it. It does not take
+                // the drag: a swipe across a widget still turns the page.
+                if (state.editing) {
+                    Box(
+                        modifier = Modifier
+                            .matchParentSize()
+                            .pointerInput(placement.hostId) {
+                                detectTapGestures { onEditingTap() }
+                            },
+                    )
+                }
 
                 if (flashing) {
                     WidgetFlash(onDone = onRevealShown)
@@ -903,7 +916,6 @@ private fun HomeCell(
     handlers: IconGestureHandlers,
     outlined: Boolean,
     highlighted: Boolean,
-    refused: Boolean,
     dimmed: Boolean,
     revealed: Boolean,
     onRevealShown: () -> Unit,
@@ -916,13 +928,18 @@ private fun HomeCell(
         if (outlined || revealed) {
             CellOutline(
                 highlighted = highlighted,
-                refused = refused,
                 pulsing = revealed,
                 onPulseShown = onRevealShown,
             )
         }
 
         if (app == null) return@Box
+
+        val badgeCount = if (state.settings.showNotificationBadges) {
+            state.notificationCounts[app.componentName.packageName] ?: 0
+        } else {
+            0
+        }
 
         DraggableIcon(
             app = app,
@@ -938,6 +955,7 @@ private fun HomeCell(
             showLabel = showLabel,
             labelColor = Color.White,
             labelShadow = true,
+            badgeCount = badgeCount,
         )
     }
 }
@@ -946,7 +964,6 @@ private fun HomeCell(
 @Composable
 private fun BoxScope.CellOutline(
     highlighted: Boolean,
-    refused: Boolean,
     pulsing: Boolean,
     onPulseShown: () -> Unit,
 ) {
@@ -977,10 +994,7 @@ private fun BoxScope.CellOutline(
         else -> 0.16f
     }
 
-    // A cell that would not take what is being carried is shown in the error
-    // colour, so the refusal is visible before the finger is lifted.
     val colour = when {
-        refused -> colors.error
         highlighted || pulsing -> colors.primary
         else -> colors.onSurface
     }

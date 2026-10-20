@@ -113,8 +113,6 @@ class LoadedPack(
     private val resources: Resources,
     private val icons: Map<String, String>,
 ) {
-    val iconCount: Int get() = icons.size
-
     /** The icon [app] has in this pack, or null when the pack doesn't cover it. */
     fun iconFor(app: AppInfo): Drawable? {
         val component = app.componentName

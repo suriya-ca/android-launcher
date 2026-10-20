@@ -508,6 +508,7 @@ fun DraggableIcon(
     showLabel: Boolean = true,
     labelColor: Color? = null,
     labelShadow: Boolean = false,
+    badgeCount: Int = 0,
 ) {
     // The icon's place, as a layout to convert through rather than as a rect
     // copied out of one: the page it sits on slides away under the finger
@@ -540,6 +541,7 @@ fun DraggableIcon(
         showLabel = showLabel,
         labelColor = labelColor,
         labelShadow = labelShadow,
+        badgeCount = badgeCount,
     )
 }
 

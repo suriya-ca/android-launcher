@@ -112,6 +112,8 @@ class HomeDropArea {
         )
     }
 
+    var dockSlots: Int by mutableIntStateOf(LauncherSettings.DEFAULT_DOCK_SLOTS)
+
     /**
      * The dock slot [position] is over, or null when it is over none.
      *
@@ -123,7 +125,7 @@ class HomeDropArea {
         if (!enabled) return null
         val local = dockPoint(position) ?: return null
         val layout = dock ?: return null
-        return slotInDock(local, layout.size.toSize())
+        return slotInDock(local, layout.size.toSize(), dockSlots)
     }
 
     /** [position] in the grid's own space, where its top left corner is (0, 0). */
@@ -211,8 +213,7 @@ internal fun cellInGrid(
 }
 
 /** The dock slot [local] sits in, or null when it is over none. */
-internal fun slotInDock(local: Offset, size: Size): Int? {
-    val slots = LauncherSettings.DOCK_SLOTS
+internal fun slotInDock(local: Offset, size: Size, slots: Int = LauncherSettings.DEFAULT_DOCK_SLOTS): Int? {
     if (slots <= 0 || size.width <= 0f || size.height <= 0f) return null
     if (local.x < 0f || local.y < 0f) return null
     if (local.x >= size.width || local.y >= size.height) return null

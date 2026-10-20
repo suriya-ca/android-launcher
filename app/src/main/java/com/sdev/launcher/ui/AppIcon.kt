@@ -7,7 +7,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -39,12 +41,13 @@ fun AppIconTileContent(
     showLabel: Boolean = true,
     labelColor: Color? = null,
     labelShadow: Boolean = false,
+    badgeCount: Int = 0,
 ) {
     Column(
         modifier = modifier,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        AppIconImage(icon = icon, label = app.label, size = iconSize)
+        AppIconImage(icon = icon, label = app.label, size = iconSize, badgeCount = badgeCount)
 
         if (showLabel) {
             Spacer(Modifier.height(6.dp))
@@ -66,7 +69,6 @@ fun AppIconTileContent(
 /** Home screen labels sit on the wallpaper, so they need a little help. */
 private val LABEL_SHADOW = Shadow(color = Color.Black.copy(alpha = 0.7f), blurRadius = 6f)
 
-
 /**
  * The icon itself, falling back to a coloured letter while the real bitmap is
  * still being decoded.
@@ -77,6 +79,7 @@ fun AppIconImage(
     label: String,
     size: Dp,
     modifier: Modifier = Modifier,
+    badgeCount: Int = 0,
 ) {
     Box(
         modifier = modifier.size(size),
@@ -91,6 +94,31 @@ fun AppIconImage(
             )
         } else {
             LetterAvatar(label = label, modifier = Modifier.fillMaxSize())
+        }
+
+        if (badgeCount > 0) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.error)
+                    .padding(horizontal = if (badgeCount > 9) 4.dp else 0.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (badgeCount > 1) {
+                    Text(
+                        text = if (badgeCount > 99) "99+" else badgeCount.toString(),
+                        color = MaterialTheme.colorScheme.onError,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = androidx.compose.ui.unit.TextUnit(9f, androidx.compose.ui.unit.TextUnitType.Sp),
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                        ),
+                        modifier = Modifier.padding(2.dp),
+                    )
+                } else {
+                    Box(modifier = Modifier.size(8.dp))
+                }
+            }
         }
     }
 }

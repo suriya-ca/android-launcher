@@ -142,6 +142,8 @@ private fun SettingsHome(
         stringResource(R.string.sort_za),
     )
     val rowLabels = LauncherSettings.HOME_ROW_CHOICES.map { it.toString() }
+    val homeColumnLabels = LauncherSettings.HOME_COLUMN_CHOICES.map { it.toString() }
+    val dockSlotLabels = LauncherSettings.DOCK_SLOT_CHOICES.map { it.toString() }
 
     // Opens the card of choices for a row. The row hands over its own bounds,
     // which is what the card hangs off.
@@ -162,6 +164,24 @@ private fun SettingsHome(
             onBack = onBack,
         ) {
             SettingsSection(stringResource(R.string.settings_home)) {
+                SettingsChoiceRow(
+                    title = stringResource(R.string.settings_home_columns),
+                    subtitle = stringResource(R.string.settings_home_columns_hint),
+                    value = pluralStringResource(
+                        R.plurals.settings_columns_count,
+                        settings.homeColumns,
+                        settings.homeColumns,
+                    ),
+                    onOpen = ask(
+                        options = homeColumnLabels,
+                        selected = LauncherSettings.HOME_COLUMN_CHOICES.indexOf(settings.homeColumns),
+                    ) { index ->
+                        viewModel.setHomeColumns(LauncherSettings.HOME_COLUMN_CHOICES[index])
+                    },
+                )
+
+                SettingsDivider()
+
                 SettingsChoiceRow(
                     title = stringResource(R.string.settings_grid_rows),
                     subtitle = stringResource(R.string.settings_grid_rows_hint),
@@ -196,6 +216,60 @@ private fun SettingsHome(
                         onClick = {
                             runCatching {
                                 context.startActivity(NotificationShadeService.settingsIntent())
+                            }
+                        },
+                    )
+                }
+            }
+
+            SettingsSection(stringResource(R.string.settings_dock)) {
+                SettingsSwitchRow(
+                    title = stringResource(R.string.settings_show_dock),
+                    subtitle = stringResource(R.string.settings_show_dock_hint),
+                    checked = settings.showDock,
+                    onCheckedChange = viewModel::setShowDock,
+                )
+
+                if (settings.showDock) {
+                    SettingsDivider()
+
+                    SettingsChoiceRow(
+                        title = stringResource(R.string.settings_dock_slots),
+                        subtitle = stringResource(R.string.settings_dock_slots_hint),
+                        value = pluralStringResource(
+                            R.plurals.settings_slots_count,
+                            settings.dockSlots,
+                            settings.dockSlots,
+                        ),
+                        onOpen = ask(
+                            options = dockSlotLabels,
+                            selected = LauncherSettings.DOCK_SLOT_CHOICES.indexOf(settings.dockSlots),
+                        ) { index ->
+                            viewModel.setDockSlots(LauncherSettings.DOCK_SLOT_CHOICES[index])
+                        },
+                    )
+                }
+            }
+
+            SettingsSection(stringResource(R.string.settings_badges)) {
+                SettingsSwitchRow(
+                    title = stringResource(R.string.settings_show_badges),
+                    subtitle = stringResource(R.string.settings_show_badges_hint),
+                    checked = settings.showNotificationBadges,
+                    onCheckedChange = viewModel::setShowNotificationBadges,
+                )
+
+                if (settings.showNotificationBadges && !state.notificationPermissionGranted) {
+                    SettingsDivider()
+
+                    SettingsRow(
+                        title = stringResource(R.string.settings_badges_permission),
+                        subtitle = stringResource(R.string.settings_badges_permission_hint),
+                        onClick = {
+                            runCatching {
+                                context.startActivity(
+                                    com.sdev.launcher.service.LauncherNotificationListenerService.settingsIntent(),
+                                )
                             }
                         },
                     )
@@ -274,6 +348,15 @@ private fun SettingsHome(
                     title = stringResource(R.string.settings_show_search),
                     checked = settings.showSearchBar,
                     onCheckedChange = viewModel::setShowSearchBar,
+                )
+
+                SettingsDivider()
+
+                SettingsSwitchRow(
+                    title = stringResource(R.string.settings_t9_search),
+                    subtitle = stringResource(R.string.settings_t9_search_hint),
+                    checked = settings.enableT9Search,
+                    onCheckedChange = viewModel::setEnableT9Search,
                 )
             }
 

@@ -19,7 +19,7 @@ import org.junit.Test
  */
 class HomeDropAreaTest {
 
-    private val columns = LauncherSettings.HOME_COLUMNS
+    private val columns = LauncherSettings.DEFAULT_HOME_COLUMNS
     private val rows = 5
 
     /** A grid of 100 pixel cells, starting at its own top left corner. */
@@ -103,7 +103,7 @@ class HomeDropAreaTest {
     @Test
     fun `the dock is cut into slots across its width`() {
         val dock = Size(columns * 100f, 100f)
-        val last = LauncherSettings.DOCK_SLOTS - 1
+        val last = LauncherSettings.DEFAULT_DOCK_SLOTS - 1
 
         assertEquals(0, slotInDock(Offset(0f, 50f), dock))
         assertEquals(1, slotInDock(Offset(150f, 50f), dock))

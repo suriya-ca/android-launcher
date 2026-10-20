@@ -114,6 +114,15 @@ fun AppDrawerPage(
                     )
                 }
             }
+
+            if (settings.enableT9Search) {
+                T9DialPad(
+                    onDigitPress = { digit -> onQueryChange(state.query + digit) },
+                    onBackspace = {
+                        if (state.query.isNotEmpty()) onQueryChange(state.query.dropLast(1))
+                    },
+                )
+            }
         }
     }
 }
@@ -212,6 +221,12 @@ private fun AppGridPage(
                     if (app == null) {
                         Spacer(Modifier.weight(1f))
                     } else {
+                        val badgeCount = if (state.settings.showNotificationBadges) {
+                            state.notificationCounts[app.componentName.packageName] ?: 0
+                        } else {
+                            0
+                        }
+
                         DraggableIcon(
                             app = app,
                             icon = state.icons[app.key],
@@ -228,6 +243,7 @@ private fun AppGridPage(
                                 .alpha(if (controller.carries(app)) 0.4f else 1f),
                             iconSize = state.settings.iconSize.sizeDp.dp,
                             showLabel = state.settings.showLabels,
+                            badgeCount = badgeCount,
                         )
                     }
                 }
@@ -264,6 +280,12 @@ private fun ScrollingApps(
         modifier = Modifier.fillMaxSize(),
     ) {
         itemsIndexed(apps) { index, app ->
+            val badgeCount = if (state.settings.showNotificationBadges) {
+                state.notificationCounts[app.componentName.packageName] ?: 0
+            } else {
+                0
+            }
+
             DraggableIcon(
                 app = app,
                 icon = state.icons[app.key],
@@ -277,6 +299,7 @@ private fun ScrollingApps(
                     .alpha(if (controller.carries(app)) 0.4f else 1f),
                 iconSize = state.settings.iconSize.sizeDp.dp,
                 showLabel = state.settings.showLabels,
+                badgeCount = badgeCount,
             )
         }
     }
