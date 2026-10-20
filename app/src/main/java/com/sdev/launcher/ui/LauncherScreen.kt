@@ -137,9 +137,15 @@ fun LauncherScreen(
     var dragLayerOrigin by remember { mutableStateOf(Offset.Zero) }
 
     // The place under the open folder is not a place the home screen can be
-    // dropped on, so the card is told about and forgotten about with it.
+    // dropped on, so the card is told about and forgotten about with it. The
+    // place the card was is forgotten too, so that a folder opened later is
+    // not measured against where the last one was.
     LaunchedEffect(state.openFolder) {
-        if (state.openFolder == null) dropArea.folderCard = null
+        if (state.openFolder == null) {
+            dropArea.folderCard = null
+            folderBounds = null
+            folderMembers = emptyMap()
+        }
     }
 
     val band = with(LocalDensity.current) { DRAWER_PULL_ZONE.toPx() }

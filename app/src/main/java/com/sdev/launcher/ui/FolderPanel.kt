@@ -89,6 +89,10 @@ fun FolderPanel(
         // above it and the dock below it can both be seen and can both be
         // dropped on: an app carried out of the folder goes onto the grid
         // behind, or into the dock.
+        //
+        // Nothing here holds the touch: the card has its own gesture, and
+        // everywhere else the touch belongs to the home screen behind, which is
+        // what lets an app be carried out of the folder and onto it.
         contentAlignment = Alignment.Center,
     ) {
         Column(
