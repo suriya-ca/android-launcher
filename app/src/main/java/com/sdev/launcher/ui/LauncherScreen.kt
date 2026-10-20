@@ -277,6 +277,11 @@ fun LauncherScreen(
                         // nothing can be put there.
                         val ontoWidget = cell != null && cell in covered
 
+                        // The open folder is over the page, so a drop on it is
+                        // a drop on the folder and not on the cell behind it.
+                        val overTheFolder = state.openFolder != null &&
+                            folderBounds?.contains(position) == true
+
                         when (val carried = drag.dragged) {
                             // A folder is carried whole. It goes on the home
                             // screen and nowhere else: the dock holds apps.
@@ -298,6 +303,13 @@ fun LauncherScreen(
                                     val app = carried.app
 
                                     when {
+                                        // Let go on the open folder: it goes
+                                        // into it.
+                                        overTheFolder -> viewModel.addAppToFolder(
+                                            state.openFolder.orEmpty(),
+                                            app,
+                                        )
+
                                         slot != null && app != null ->
                                             viewModel.addToDock(app, slot)
 
@@ -311,6 +323,13 @@ fun LauncherScreen(
                                 // Already on the home screen: this is a move.
                                 DragArea.HOME, DragArea.DOCK -> {
                                     when {
+                                        // Let go on the open folder: it goes
+                                        // into it.
+                                        overTheFolder -> viewModel.addAppToFolder(
+                                            state.openFolder.orEmpty(),
+                                            carried.app,
+                                        )
+
                                         // A home icon let go on the dock moves into a
                                         // free slot near the finger. It does not
                                         // swap with the dock app it was dropped on:

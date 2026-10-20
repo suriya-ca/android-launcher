@@ -278,6 +278,29 @@ class SettingsRepository(context: Context) {
         }
 
     /**
+     * Puts the app [key] into the folder [folderId], taking it from wherever
+     * it was.
+     *
+     * The app is in one place at a time, so it leaves the cell, the dock slot
+     * or the folder it was in.
+     */
+    suspend fun addAppToFolder(key: String, folderId: String) =
+        mutateSlots { _, _, home, folders, dock, _ ->
+            val layout = HomeLayout(home, folders)
+            if (layout.folders[folderId] == null) return@mutateSlots
+
+            // The app is in the folder now, so it is not in the dock as well.
+            dock.entries.firstOrNull { it.value == key }?.let { dock.remove(it.key) }
+
+            val moved = layout.withAppMovedIntoFolder(folderId, key)
+
+            home.clear()
+            home.putAll(moved.cells)
+            folders.clear()
+            folders.putAll(moved.folders)
+        }
+
+    /**
      * Takes the app [key] out of the folder [folderId] and puts it on the home
      * screen near the folder, so that it is still on the screen and is simply
      * not in the folder any more.

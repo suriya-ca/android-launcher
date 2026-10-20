@@ -686,6 +686,18 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     /**
+     * Puts the app into the folder [folderId], taking it from wherever it was.
+     *
+     * The app is in one place at a time, so it leaves the cell, the dock slot
+     * or the folder it was in.
+     */
+    fun addAppToFolder(folderId: String, app: AppInfo) {
+        viewModelScope.launch {
+            settingsRepository.addAppToFolder(app.key, folderId)
+        }
+    }
+
+    /**
      * Takes the app out of the folder and puts it on the home screen, so that
      * it is still on the screen and is simply not in the folder any more.
      */

@@ -349,4 +349,31 @@ class HomeFoldersTest {
         assertEquals(HomeItem.App("app.a"), after.cells[0])
         assertTrue(after.folders.isEmpty())
     }
+
+    @Test
+    fun `an app put into a folder leaves the cell it was on`() {
+        val withFolder = layout().withFolderAt("f1", 4, listOf("app.b"))
+
+        val after = withFolder.withAppMovedIntoFolder("f1", "app.a")
+
+        // The cell the app was on is free...
+        assertNull(after.cells[0])
+        // ...and the app is in the folder with the one that was already there.
+        assertEquals(listOf("app.b", "app.a"), after.folders["f1"]?.appKeys)
+    }
+
+    @Test
+    fun `an app put into a folder leaves the folder it was in`() {
+        // The app is in a folder and nowhere else.
+        val first = HomeLayout(
+            cells = mapOf(4 to HomeItem.Folder("f1")),
+            folders = mapOf("f1" to Folder("f1", "", listOf("app.a", "app.b"))),
+        )
+        val second = first.withFolderAt("f2", 5, listOf("app.c"))
+
+        val after = second.withAppMovedIntoFolder("f2", "app.a")
+
+        assertEquals(listOf("app.b"), after.folders["f1"]?.appKeys)
+        assertEquals(listOf("app.c", "app.a"), after.folders["f2"]?.appKeys)
+    }
 }

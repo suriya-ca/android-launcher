@@ -352,7 +352,7 @@ fun HomeScreen(
             // again, and a long press asks for the home options. Cells under a
             // widget are not empty, and a widget long-presses for its own card.
             .pointerInput(
-                state.homeApps,
+                state.homeCells,
                 state.dockApps,
                 state.settings.widgets,
                 state.settings.homeItems,

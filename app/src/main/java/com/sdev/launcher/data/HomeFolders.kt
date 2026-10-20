@@ -155,7 +155,36 @@ fun HomeLayout.withoutFolder(id: String): HomeLayout {
     return copy(cells = cells, folders = folders - id)
 }
 
-/** The home screen with the folder [id] called [name]. */
+/**
+ * The home screen with the app [key] put into the folder [folderId], taken
+ * from wherever it was.
+ *
+ * The app is in one place at a time, so it leaves the cell and the folder it
+ * was in. A folder left with nothing in it goes with it.
+ */
+fun HomeLayout.withAppMovedIntoFolder(folderId: String, key: String): HomeLayout {
+    val folder = folders[folderId] ?: return this
+
+    val cell = cellOfApp(key)
+    val from = folderOfApp(key)?.id
+
+    val cleared = when {
+        cell != null -> copy(cells = cells - cell)
+        else -> this
+    }
+
+    val without = if (from != null && from != folderId) {
+        cleared.withoutAppInFolder(from, key)
+    } else {
+        cleared
+    }
+
+    return without.withAppInFolder(folderId, key)
+}
+
+/**
+ * The home screen with the folder [id] called [name].
+ */
 fun HomeLayout.withFolderNamed(id: String, name: String): HomeLayout {
     val folder = folders[id] ?: return this
     return copy(folders = folders + (id to folder.copy(name = name)))
