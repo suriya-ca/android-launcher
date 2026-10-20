@@ -3,19 +3,17 @@ package com.sdev.launcher.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
@@ -33,26 +31,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.sdev.launcher.R
 import com.sdev.launcher.data.LauncherSettings
-
-/** The size of one page thumbnail in the edit mode's strip. */
-private val THUMB_WIDTH = 56.dp
-private val THUMB_HEIGHT = 92.dp
-
-/** Keys for the two tiles that make room for another page, one at each end. */
-private const val ADD_LEFT_KEY = "add-left"
-private const val ADD_RIGHT_KEY = "add-right"
-
-/** How far a page's little icons are pulled in from its edges. */
-private val THUMB_INSET = 7.dp
 
 /**
  * How much the home screen is pulled back while it is being rearranged. Small
@@ -60,97 +52,34 @@ private val THUMB_INSET = 7.dp
  */
 internal val EDIT_CONTENT_SCALE = 0.9f
 
-/** How much room the edit mode's strip and buttons need along the bottom. */
-internal val EDIT_MODE_HEIGHT = 158.dp
+/** How much room the edit mode's buttons need along the bottom. */
+internal val EDIT_MODE_HEIGHT = 84.dp
+
+/** How far a page's outline is pulled in from the edge of its space. */
+internal val PAGE_FRAME_INSET = 10.dp
+
+/** The corner of a page's outline. */
+internal val PAGE_FRAME_CORNER = 28.dp
 
 /**
- * The bottom of the home screen's edit mode: the pages as little thumbnails,
- * with a tile at either end to make room for another one, and the buttons that
- * reach the wallpaper, the widgets and the launcher's own settings.
+ * The bottom of the home screen's edit mode: the buttons that reach the
+ * wallpaper, the widgets and the launcher's own settings.
  *
- * This is the One UI arrangement - the pages are dragged back so they can be
- * seen all at once, and everything to do with them is along the bottom rather
- * than in a menu.
+ * The pages used to be drawn here as thumbnails; they are gone now that the
+ * page can be managed from the page itself, and the home screen keeps the room
+ * along the bottom for this one row.
  */
 @Composable
 fun HomeEditMode(
-    pages: Int,
-    currentPage: Int,
-    rows: Int,
-    columns: Int = LauncherSettings.DEFAULT_HOME_COLUMNS,
-    canAddPage: Boolean,
-    cellsOnPage: (Int) -> Set<Int>,
-    onSelectPage: (Int) -> Unit,
-    onAddPage: () -> Unit,
-    onAddPageLeft: () -> Unit,
-    onRemovePage: (Int) -> Unit,
-    onMovePage: (Int, Int) -> Unit,
     onWallpaper: () -> Unit,
     onWidgets: () -> Unit,
     onSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    /** The page whose options were asked for, and where its thumbnail is. */
-    var options by remember { mutableStateOf<Pair<Int, Rect>?>(null) }
-
-    /** A page asked to be taken away that still has something on it. */
-    var confirming by remember { mutableStateOf<Int?>(null) }
-
-    /**
-     * Takes a page away, asking first when there is something on it.
-     *
-     * Removing a page removes everything that is on it, so a page with icons or
-     * widgets on it is not taken away on one tap by mistake.
-     */
-    fun remove(page: Int) {
-        if (cellsOnPage(page).isEmpty()) {
-            onRemovePage(page)
-        } else {
-            confirming = page
-        }
-    }
-
     Column(
         modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        LazyRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // A tile at either end, so that a page can be made room for at the
-            // front of the home screen as well as after the last one.
-            if (canAddPage) {
-                item(key = ADD_LEFT_KEY) {
-                    AddPageTile(onClick = onAddPageLeft)
-                }
-            }
-
-            items(count = pages, key = { it }) { page ->
-                PageThumbnail(
-                    occupied = cellsOnPage(page),
-                    rows = rows,
-                    columns = columns,
-                    current = page == currentPage,
-                    // Any page but the last can be taken away, and everything on
-                    // it goes with it. The home screen always has a page to show.
-                    removable = pages > 1,
-                    onTap = { onSelectPage(page) },
-                    onRemove = { remove(page) },
-                    onLongPress = { anchor -> options = page to anchor },
-                )
-            }
-
-            if (canAddPage) {
-                item(key = ADD_RIGHT_KEY) {
-                    AddPageTile(onClick = onAddPage)
-                }
-            }
-        }
-
-        Spacer(Modifier.height(14.dp))
-
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             EditModeButton(
                 glyph = Glyph.WALLPAPER,
@@ -169,36 +98,124 @@ fun HomeEditMode(
             )
         }
     }
+}
 
-    options?.let { (page, anchor) ->
-        PageOptionsCard(
-            anchor = anchor,
-            canMoveLeft = page > 0,
-            canMoveRight = page < pages - 1,
-            canRemove = pages > 1,
-            onMoveLeft = {
-                onMovePage(page, page - 1)
-                options = null
+/**
+ * A page-sized outline shown at either end of the edit mode's pager. It is a
+ * place to put a page rather than a page itself: the + in the middle makes one.
+ *
+ * The outline is only the frame; the button in the middle is the whole target,
+ * so a tap anywhere else still falls through and puts the edit mode away.
+ */
+@Composable
+internal fun AddPageOutline(
+    label: String,
+    description: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colours = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(PAGE_FRAME_CORNER)
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(PAGE_FRAME_INSET)
+            .clip(shape)
+            .background(colours.surface.copy(alpha = 0.08f))
+            .drawBehind {
+                drawRoundRect(
+                    color = colours.primary.copy(alpha = 0.5f),
+                    cornerRadius = CornerRadius(PAGE_FRAME_CORNER.toPx()),
+                    style = Stroke(
+                        width = 2.dp.toPx(),
+                        pathEffect = PathEffect.dashPathEffect(
+                            floatArrayOf(14.dp.toPx(), 10.dp.toPx()),
+                        ),
+                    ),
+                )
             },
-            onMoveRight = {
-                onMovePage(page, page + 1)
-                options = null
-            },
-            onRemove = {
-                remove(page)
-                options = null
-            },
-            onDismiss = { options = null },
-        )
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier
+                .clip(RoundedCornerShape(24.dp))
+                .clickable(onClick = onClick)
+                .semantics { contentDescription = description }
+                .padding(horizontal = 24.dp, vertical = 20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(56.dp)
+                    .clip(CircleShape)
+                    .background(colours.primaryContainer),
+                contentAlignment = Alignment.Center,
+            ) {
+                Glyph(
+                    glyph = Glyph.ADD,
+                    tint = colours.onPrimaryContainer,
+                    size = 26.dp,
+                )
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            Text(
+                text = label,
+                style = MaterialTheme.typography.titleMedium,
+                color = colours.onSurface,
+            )
+        }
     }
+}
 
-    confirming?.let { page ->
+/**
+ * What can be done with the page under the finger, offered where it was pressed.
+ *
+ * A long press on empty space opens this card. Removing a page that still holds
+ * something asks first, because everything on it goes with it.
+ */
+@Composable
+internal fun PageOptions(
+    page: Int,
+    pageCount: Int,
+    anchor: Rect,
+    hasContent: Boolean,
+    isMainPage: Boolean,
+    onSetMainPage: () -> Unit,
+    onRemovePage: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var confirming by remember(page) { mutableStateOf(false) }
+
+    PageOptionsCard(
+        anchor = anchor,
+        showSetMain = !isMainPage,
+        canRemove = pageCount > 1,
+        onSetMain = {
+            onSetMainPage()
+            onDismiss()
+        },
+        onRemove = {
+            if (hasContent) {
+                confirming = true
+            } else {
+                onRemovePage(page)
+                onDismiss()
+            }
+        },
+        onDismiss = onDismiss,
+    )
+
+    if (confirming) {
         RemovePageDialog(
             onConfirm = {
-                confirming = null
+                confirming = false
                 onRemovePage(page)
+                onDismiss()
             },
-            onDismiss = { confirming = null },
+            onDismiss = { confirming = false },
         )
     }
 }
@@ -231,77 +248,14 @@ private fun RemovePageDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
     )
 }
 
-/**
- * One page, drawn as a miniature: a rounded card with a mark for everything
- * sitting on that page, in the place it sits in.
- *
- * Tapping it turns to that page; holding it asks what should happen to it; and
- * an empty page carries a cross that takes it away.
- */
-@Composable
-private fun PageThumbnail(
-    occupied: Set<Int>,
-    rows: Int,
-    columns: Int = LauncherSettings.DEFAULT_HOME_COLUMNS,
-    current: Boolean,
-    removable: Boolean,
-    onTap: () -> Unit,
-    onRemove: () -> Unit,
-    onLongPress: (Rect) -> Unit,
-) {
-    var bounds by remember { mutableStateOf(Rect.Zero) }
-    val shape = RoundedCornerShape(12.dp)
-
-    Box(
-        modifier = Modifier
-            .size(width = THUMB_WIDTH, height = THUMB_HEIGHT)
-            .onGloballyPositioned { bounds = it.boundsInRoot() }
-            .clip(shape)
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
-            .then(
-                if (current) {
-                    Modifier.border(2.dp, MaterialTheme.colorScheme.primary, shape)
-                } else {
-                    Modifier
-                },
-            )
-            .clickable(onClick = onTap)
-            .pointerInput(current, occupied) {
-                detectTapGestures(onLongPress = { onLongPress(bounds) })
-            },
-        contentAlignment = Alignment.Center,
-    ) {
-        PageMiniature(occupied = occupied, rows = rows, columns = columns)
-
-        if (removable) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(3.dp)
-                    .size(20.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surfaceContainerHighest)
-                    .clickable(onClick = onRemove),
-                contentAlignment = Alignment.Center,
-            ) {
-                Glyph(
-                    glyph = Glyph.CLOSE,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    size = 12.dp,
-                )
-            }
-        }
-    }
-}
-
 /** The marks standing in for the icons and widgets on one page. */
 @Composable
 internal fun PageMiniature(
     occupied: Set<Int>,
     rows: Int,
     columns: Int = LauncherSettings.DEFAULT_HOME_COLUMNS,
-    dot: Dp = 7.dp,
-    inset: Dp = THUMB_INSET,
+    dot: Dp = 5.dp,
+    inset: Dp = 5.dp,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -405,29 +359,6 @@ internal fun DragPageStrip(
     }
 }
 
-/**
- * The tile that makes room for another page. There is one at either end of the
- * strip: the one on the left puts the page in front of the first, and the one on
- * the right puts it after the last.
- */
-@Composable
-private fun AddPageTile(onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .size(width = THUMB_WIDTH, height = THUMB_HEIGHT)
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Glyph(
-            glyph = Glyph.ADD,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            size = 22.dp,
-        )
-    }
-}
-
 /** One of the round-cornered buttons along the bottom of the edit mode. */
 @Composable
 private fun EditModeButton(glyph: Glyph, label: String, onClick: () -> Unit) {
@@ -452,31 +383,22 @@ private fun EditModeButton(glyph: Glyph, label: String, onClick: () -> Unit) {
     }
 }
 
-/** What can be done with one page, offered on the thumbnail it belongs to. */
+/** What can be done with one page, offered where the page was long pressed. */
 @Composable
 private fun PageOptionsCard(
     anchor: Rect,
-    canMoveLeft: Boolean,
-    canMoveRight: Boolean,
+    showSetMain: Boolean,
     canRemove: Boolean,
-    onMoveLeft: () -> Unit,
-    onMoveRight: () -> Unit,
+    onSetMain: () -> Unit,
     onRemove: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     OneUiPopup(anchor = anchor, onDismiss = onDismiss) {
-        if (canMoveLeft) {
+        if (showSetMain) {
             OneUiAction(
-                glyph = Glyph.ARROW_LEFT,
-                label = stringResource(R.string.edit_page_left),
-                onClick = onMoveLeft,
-            )
-        }
-        if (canMoveRight) {
-            OneUiAction(
-                glyph = Glyph.ARROW_RIGHT,
-                label = stringResource(R.string.edit_page_right),
-                onClick = onMoveRight,
+                glyph = Glyph.HOME,
+                label = stringResource(R.string.edit_page_set_main),
+                onClick = onSetMain,
             )
         }
         if (canRemove) {

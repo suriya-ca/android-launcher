@@ -112,4 +112,20 @@ class HomeDropAreaTest {
         assertNull(slotInDock(Offset(10f, 100f), dock))
         assertNull(slotInDock(Offset(10f, 10f), Size.Zero))
     }
+
+    @Test
+    fun `dock drops follow the apps that are shown`() {
+        val dock = Size(300f, 100f)
+
+        // Three apps in slots 0, 2 and 4, drawn evenly: the middle of the bar
+        // is the second app, not the middle of the five configured slots.
+        assertEquals(0, dockTargetAt(Offset(10f, 50f), dock, listOf(0, 2, 4)))
+        assertEquals(2, dockTargetAt(Offset(150f, 50f), dock, listOf(0, 2, 4)))
+        assertEquals(4, dockTargetAt(Offset(290f, 50f), dock, listOf(0, 2, 4)))
+
+        // An empty dock still has somewhere for the first app to go.
+        assertEquals(0, dockTargetAt(Offset(10f, 50f), dock, emptyList()))
+        assertNull(dockTargetAt(Offset(-1f, 50f), dock, listOf(0, 2, 4)))
+        assertNull(dockTargetAt(Offset(10f, 100f), dock, listOf(0, 2, 4)))
+    }
 }

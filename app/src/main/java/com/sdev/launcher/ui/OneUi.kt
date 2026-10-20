@@ -85,9 +85,10 @@ enum class Glyph {
     SETTINGS,
     WALLPAPER,
     WIDGETS,
+    APPS,
+    ICONS,
+    THEME,
     CLOSE,
-    ARROW_LEFT,
-    ARROW_RIGHT,
 }
 
 /** The dim behind a card, which also swallows the taps that dismiss it. */
@@ -355,19 +356,54 @@ private fun DrawScope.drawGlyph(glyph: Glyph, tint: Color) {
             }
         }
 
+        Glyph.APPS -> {
+            // Nine dots: the app drawer seen from above.
+            val step = side * 0.24f
+            for (x in -1..1) {
+                for (y in -1..1) {
+                    drawCircle(
+                        color = tint,
+                        radius = side * 0.055f,
+                        center = Offset(centre.x + x * step, centre.y + y * step),
+                    )
+                }
+            }
+        }
+
+        Glyph.ICONS -> {
+            // One icon: a rounded frame with a mark in the middle.
+            val width = side * 0.62f
+            drawRoundRect(
+                color = tint,
+                topLeft = Offset(centre.x - width / 2f, centre.y - width / 2f),
+                size = Size(width, width),
+                cornerRadius = CornerRadius(side * 0.16f),
+                style = Stroke(width = line * 0.85f),
+            )
+            drawCircle(color = tint, radius = side * 0.09f, center = centre)
+        }
+
+        Glyph.THEME -> {
+            // A circle with one half filled: light and dark in one mark.
+            drawCircle(
+                color = tint,
+                radius = side * 0.32f,
+                center = centre,
+                style = Stroke(width = line * 0.9f),
+            )
+            drawArc(
+                color = tint,
+                startAngle = 90f,
+                sweepAngle = 180f,
+                useCenter = true,
+                topLeft = Offset(centre.x - side * 0.32f, centre.y - side * 0.32f),
+                size = Size(side * 0.64f, side * 0.64f),
+            )
+        }
+
         Glyph.CLOSE -> {
             bar(-0.26f, -0.26f, 0.26f, 0.26f)
             bar(0.26f, -0.26f, -0.26f, 0.26f)
-        }
-
-        Glyph.ARROW_LEFT -> {
-            bar(0.16f, -0.26f, -0.24f, 0f)
-            bar(-0.24f, 0f, 0.16f, 0.26f)
-        }
-
-        Glyph.ARROW_RIGHT -> {
-            bar(-0.16f, -0.26f, 0.24f, 0f)
-            bar(0.24f, 0f, -0.16f, 0.26f)
         }
     }
 }

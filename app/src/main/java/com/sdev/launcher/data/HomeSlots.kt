@@ -47,26 +47,26 @@ fun <T> shiftCellsFrom(items: Map<Int, T>, first: Int, delta: Int): Map<Int, T> 
     }
 
 /**
- * Moves everything on page [from] to page [to], with the pages in between
- * sliding up to close the gap - which is what dragging one page thumbnail past
- * its neighbours amounts to.
- *
- * Everything keeps its place within its own page: only the page number changes.
+ * Where the main home page sits after an empty page has been put in at [at].
+ * Everything from there on slides one page along, so the same page stays main.
  */
-fun <T> movePageCells(items: Map<Int, T>, grid: HomeGrid, from: Int, to: Int): Map<Int, T> {
-    if (from == to) return items
+fun mainPageAfterInsert(mainPage: Int, at: Int): Int =
+    if (mainPage >= at) mainPage + 1 else mainPage
 
-    val count = grid.cellCount
+/**
+ * Where the main home page sits after [page] has been taken away from a screen
+ * that had [pages] pages.
+ *
+ * When the main page itself goes, the page that slides into its place takes
+ * over; if it was the last page, the one before it does.
+ */
+fun mainPageAfterRemove(mainPage: Int, page: Int, pages: Int): Int {
+    if (pages <= 1) return 0
 
-    fun movedTo(page: Int): Int = when {
-        page == from -> to
-        from < to && page in (from + 1)..to -> page - 1
-        to < from && page in to until from -> page + 1
-        else -> page
-    }
-
-    return items.entries.associate { (index, value) ->
-        (movedTo(index / count) * count + index % count) to value
+    return when {
+        mainPage < page -> mainPage
+        mainPage > page -> mainPage - 1
+        else -> page.coerceAtMost(pages - 2)
     }
 }
 
@@ -146,6 +146,37 @@ fun findFreeCell(occupied: Set<Int>, capacity: Int, preferred: Int?): Int? {
  */
 fun findFreeCellOnPage(occupied: Set<Int>, grid: HomeGrid, page: Int): Int? =
     grid.cellsOfPage(page).firstOrNull { it !in occupied }
+
+/**
+ * Moves the home screen cell at [fromIndex] into the dock, beside [preferred]
+ * when that is free and into the nearest free slot when it is not. Apps that
+ * are already in the dock stay where they are: this is not a swap.
+ *
+ * When the dock already holds the same app, the home copy is simply dropped.
+ * Returns the slot the app occupies in the dock afterwards, or null when there
+ * was nothing to move or no room for it.
+ */
+fun moveHomeCellToDock(
+    home: MutableMap<Int, String>,
+    dock: MutableMap<Int, String>,
+    fromIndex: Int,
+    capacity: Int,
+    preferred: Int?,
+): Int? {
+    val key = home[fromIndex] ?: return null
+    val already = dock.entries.firstOrNull { it.value == key }?.key
+
+    if (already != null) {
+        home.remove(fromIndex)
+        return already
+    }
+
+    val slot = findFreeCell(dock.keys, capacity, preferred) ?: return null
+
+    home.remove(fromIndex)
+    dock[slot] = key
+    return slot
+}
 
 /**
  * The cell a widget of [spanX] by [spanY] cells should be anchored at, by the

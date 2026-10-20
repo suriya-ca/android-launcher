@@ -112,20 +112,26 @@ class HomeDropArea {
         )
     }
 
-    var dockSlots: Int by mutableIntStateOf(LauncherSettings.DEFAULT_DOCK_SLOTS)
-
     /**
-     * The dock slot [position] is over, or null when it is over none.
+     * The dock app [position] is over, or null when it is over none.
+     *
+     * [targets] is the dock's apps in the order they are drawn, mapped to the
+     * slots they are stored in. Empty slots are not drawn, so the width is
+     * divided between the apps that are there; an empty dock is one target.
      *
      * The dock is put away while the home screen is being rearranged, so callers
      * pass [enabled] as false then: a drop where the dock used to be must not
      * think it landed in it.
      */
-    fun dockSlotAt(position: Offset, enabled: Boolean = true): Int? {
+    fun dockSlotAt(
+        position: Offset,
+        targets: List<Int>,
+        enabled: Boolean = true,
+    ): Int? {
         if (!enabled) return null
         val local = dockPoint(position) ?: return null
         val layout = dock ?: return null
-        return slotInDock(local, layout.size.toSize(), dockSlots)
+        return dockTargetAt(local, layout.size.toSize(), targets)
     }
 
     /** [position] in the grid's own space, where its top left corner is (0, 0). */
@@ -219,6 +225,18 @@ internal fun slotInDock(local: Offset, size: Size, slots: Int = LauncherSettings
     if (local.x >= size.width || local.y >= size.height) return null
 
     return (local.x / (size.width / slots)).toInt().coerceIn(0, slots - 1)
+}
+
+/**
+ * The dock slot [local] belongs to, with the dock cut into as many equal
+ * spaces as there are apps. [targets] is those apps' stored slot numbers.
+ *
+ * An empty dock still accepts an app: a drop on it is slot zero, ready for the
+ * first app to land there.
+ */
+internal fun dockTargetAt(local: Offset, size: Size, targets: List<Int>): Int? {
+    val slot = slotInDock(local, size, targets.size.coerceAtLeast(1)) ?: return null
+    return targets.getOrNull(slot) ?: 0
 }
 
 /** Where the grid is drawn, in root coordinates. */

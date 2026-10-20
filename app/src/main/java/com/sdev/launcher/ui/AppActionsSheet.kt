@@ -39,6 +39,7 @@ fun AppActionCard(
     onHide: (() -> Unit)? = null,
     onAddToHome: (() -> Unit)? = null,
     onAddToDock: (() -> Unit)? = null,
+    onEditHome: (() -> Unit)? = null,
     onRemove: (() -> Unit)? = null,
     removeLabel: String? = null,
     showUninstall: Boolean = true,
@@ -66,6 +67,14 @@ fun AppActionCard(
         }
 
         Spacer(Modifier.height(2.dp))
+
+        if (onEditHome != null) {
+            OneUiAction(
+                glyph = Glyph.HOME,
+                label = stringResource(R.string.edit_home_screen),
+                onClick = onEditHome,
+            )
+        }
 
         if (onRemove != null) {
             OneUiAction(

@@ -109,7 +109,8 @@ data class LauncherUiState(
     val selectedWidget: Int = NO_WIDGET,
     /**
      * True while the home screen is being rearranged: the pages are pulled back,
-     * the page strip is up, and tapping the empty space puts it all away again.
+     * an add-page outline sits at either end, and tapping the empty space puts
+     * it all away again.
      */
     val editing: Boolean = false,
     /** The cell a widget has just been placed on, for its flash. */
@@ -187,6 +188,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private var iconJob: Job? = null
 
+    /** Whether the first read of the settings has said which page to open on. */
+    private var mainPageApplied = false
+
     init {
         refresh()
         viewModelScope.launch {
@@ -195,7 +199,20 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             settingsRepository.settings.collect { settings ->
                 val previous = _state.value.settings
-                _state.update { it.copy(settings = settings) }
+                _state.update { current ->
+                    current.copy(
+                        settings = settings,
+                        // The first read decides where the launcher opens.
+                        // Later settings changes must not pull the user away
+                        // from the page they are on.
+                        homePage = if (mainPageApplied) {
+                            current.homePage
+                        } else {
+                            settings.mainHomePage
+                        },
+                    )
+                }
+                mainPageApplied = true
 
                 // Icons are rendered from these settings, so any of them
                 // changing means the bitmaps have to be produced again.
@@ -272,7 +289,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun onHomeRequested() {
         closeWidgetPage()
         setDrawerOpen(false)
-        _state.update { it.copy(editing = false, selectedWidget = NO_WIDGET) }
+        _state.update {
+            it.copy(
+                homePage = it.settings.mainHomePage,
+                editing = false,
+                selectedWidget = NO_WIDGET,
+            )
+        }
     }
 
     /** Called by the home screen as the user turns from one page to the next. */
@@ -280,6 +303,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _state.update { current ->
             if (current.homePage == page) current else current.copy(homePage = page)
         }
+    }
+
+    /** Makes [page] where the launcher opens and where Home returns. */
+    fun setMainHomePage(page: Int) {
+        viewModelScope.launch { settingsRepository.setMainHomePage(page) }
     }
 
     /** Takes away the page being looked at, everything on it with it. */
@@ -292,8 +320,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     /**
-     * Takes away page [page], which the edit mode's strip of page thumbnails can
-     * ask for wherever the user happens to be.
+     * Takes away page [page], which the edit mode's page options can ask for
+     * wherever the user happens to be.
      */
     fun removeHomePage(page: Int) {
         if (page == _state.value.homePage) {
@@ -356,7 +384,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _state.update { it.copy(editing = false) }
     }
 
-    /** Adds a page after the last one, which is what the edit mode's right + does. */
+    /** Adds a page after the last one, which is what the right add-page outline does. */
     fun addHomePageAtEnd() {
         val settings = _state.value.settings
         if (settings.homePages >= LauncherSettings.HOME_PAGE_LIMIT) return
@@ -368,9 +396,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     /**
-     * Adds a page in front of the first one, which is what the edit mode's left +
-     * does. Everything already on the home screen keeps its place and shifts one
-     * page along, and the new page is turned to.
+     * Adds a page in front of the first one, which is what the left add-page
+     * outline does. Everything already on the home screen keeps its place and
+     * shifts one page along, and the new page is turned to.
      */
     fun addHomePageAtStart() {
         val settings = _state.value.settings
@@ -379,27 +407,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             settingsRepository.insertHomePage(0)
             _state.update { it.copy(homePage = 0) }
-        }
-    }
-
-    /** Drags one page thumbnail past its neighbours. */
-    fun moveHomePage(from: Int, to: Int) {
-        val pages = _state.value.settings.homePages
-        if (from == to || from !in 0 until pages || to !in 0 until pages) return
-
-        viewModelScope.launch {
-            settingsRepository.moveHomePage(from, to)
-            _state.update { current ->
-                // The page being looked at follows the one that moved.
-                current.copy(
-                    homePage = when (current.homePage) {
-                        from -> to
-                        in from..to -> current.homePage - 1
-                        in to..from -> current.homePage + 1
-                        else -> current.homePage
-                    },
-                )
-            }
         }
     }
 
@@ -485,6 +492,29 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     /**
+     * Moves a home screen icon into the dock without disturbing the apps that
+     * are already there. The slot under the finger is used when free; otherwise
+     * the nearest free slot is.
+     */
+    fun moveHomeItemToDock(fromIndex: Int, preferred: Int?) {
+        val context = getApplication<Application>()
+
+        viewModelScope.launch {
+            val slot = settingsRepository.moveHomeItemToDock(fromIndex, preferred)
+
+            if (slot == null) {
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.dock_full),
+                    Toast.LENGTH_SHORT,
+                ).show()
+            } else {
+                _state.update { it.copy(revealCell = HomeArea.DOCK to slot) }
+            }
+        }
+    }
+
+    /**
      * Puts what is being carried on [page], into the first cell of it that is
      * free. This is what letting go over a page thumbnail does.
      */
@@ -529,6 +559,19 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val settings = _state.value.settings
         val slots = if (area == HomeArea.HOME) settings.homeItems else settings.dockItems
         if (slots.containsValue(app.key)) return
+
+        // Adding an app to the dock that is already pinned to a home page is a
+        // move, not a second copy. The home icon is the thing that goes.
+        if (area == HomeArea.DOCK) {
+            val homeSlot = settings.homeItems.entries
+                .firstOrNull { it.value == app.key }
+                ?.key
+
+            if (homeSlot != null) {
+                moveHomeItemToDock(homeSlot, preferred)
+                return
+            }
+        }
 
         viewModelScope.launch {
             var pages = settings.homePages

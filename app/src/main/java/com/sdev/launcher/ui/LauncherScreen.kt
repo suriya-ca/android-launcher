@@ -51,7 +51,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.sdev.launcher.R
 import com.sdev.launcher.data.AppInfo
 import com.sdev.launcher.data.HomeArea
-import com.sdev.launcher.data.LauncherSettings
 import com.sdev.launcher.data.WidgetPlacement
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
@@ -94,6 +93,13 @@ fun LauncherScreen(
 
     var actionTarget by remember { mutableStateOf<ActionTarget?>(null) }
     var widgetTarget by remember { mutableStateOf<WidgetTarget?>(null) }
+    var pageTarget by remember { mutableStateOf<PageTarget?>(null) }
+
+    // Page options belong to the page they were asked about. Leaving edit mode
+    // or turning to another page puts them away with it.
+    LaunchedEffect(state.editing, state.homePage) {
+        pageTarget = null
+    }
 
     // Where an icon in the air would have to be let go to be taken off the
     // screen, and where it would have to be let go to be uninstalled. Both are
@@ -191,8 +197,15 @@ fun LauncherScreen(
                     page != null -> viewModel.dropOnPage(drag, page)
 
                     else -> {
-                        dropArea.dockSlots = state.settings.dockSlots
-                        val slot = if (state.settings.showDock) dropArea.dockSlotAt(position, enabled = !editing) else null
+                        val slot = if (state.settings.showDock) {
+                            dropArea.dockSlotAt(
+                                position = position,
+                                targets = state.dockApps.keys.sorted(),
+                                enabled = !editing,
+                            )
+                        } else {
+                            null
+                        }
 
                         // Something carried in from another page is on its way
                         // *onto* this one. Let go in the band above the grid -
@@ -229,6 +242,16 @@ fun LauncherScreen(
                                 }
 
                                 when {
+                                    // A home icon let go on the dock moves into a
+                                    // free slot near the finger. It does not
+                                    // swap with the dock app it was dropped on:
+                                    // that would replace it and put it back on
+                                    // the home screen.
+                                    slot != null && drag.area == DragArea.HOME ->
+                                        viewModel.moveHomeItemToDock(drag.index, slot)
+
+                                    // Dock to dock is a reorder, so a swap is what
+                                    // moving one past another means.
                                     slot != null -> viewModel.moveHomeItem(
                                         from,
                                         drag.index,
@@ -281,13 +304,17 @@ fun LauncherScreen(
     }
 
     BackHandler(
-        enabled = state.drawerOpen ||
+        enabled = pageTarget != null ||
+            state.editing ||
+            state.drawerOpen ||
             state.pickingWidget ||
             actionTarget != null ||
             widgetTarget != null ||
             state.selectedWidget != NO_WIDGET,
     ) {
         when {
+            pageTarget != null -> pageTarget = null
+            state.editing -> viewModel.setEditing(false)
             actionTarget != null -> actionTarget = null
             widgetTarget != null -> widgetTarget = null
             state.selectedWidget != NO_WIDGET -> viewModel.selectWidget(NO_WIDGET)
@@ -450,13 +477,33 @@ fun LauncherScreen(
                     active = pagerState.currentPage == HOME_PAGE,
                     page = state.homePage,
                     onPageChange = viewModel::setHomePage,
-                    onEmptyLongPress = { viewModel.setEditing(true) },
+                    onEmptyLongPress = { position ->
+                        if (state.editing) {
+                            // The page thumbnails are gone, so the page itself
+                            // offers its own options where it was long pressed.
+                            if (state.settings.homePages > 1) {
+                                pageTarget = PageTarget(
+                                    page = state.homePage,
+                                    anchor = Rect(
+                                        position.x,
+                                        position.y,
+                                        position.x,
+                                        position.y,
+                                    ),
+                                )
+                            }
+                        } else {
+                            viewModel.setEditing(true)
+                        }
+                    },
                     onEmptyTap = {
                         when {
                             state.selectedWidget != NO_WIDGET -> viewModel.selectWidget(NO_WIDGET)
                             state.editing -> viewModel.setEditing(false)
                         }
                     },
+                    onAddPageStart = viewModel::addHomePageAtStart,
+                    onAddPageEnd = viewModel::addHomePageAtEnd,
                     onWidgetLongPress = { placement, anchor ->
                         widgetTarget = WidgetTarget(placement.cell, anchor)
                     },
@@ -543,36 +590,35 @@ fun LauncherScreen(
             OneUiDim()
         }
 
-        // The edit mode's own furniture goes above that dim: a tap on the page
-        // strip or on one of the buttons is meant for them, and it is only the
-        // home screen behind that puts the edit mode away again.
+        // The edit mode's own furniture goes above that dim. The add-page
+        // outlines live in the pager itself; these are the buttons along the
+        // bottom.
         if (state.editing) {
             HomeEditMode(
-                pages = state.settings.homePages,
-                currentPage = state.homePage,
-                rows = state.settings.grid.rows,
-                columns = state.settings.grid.columns,
-                canAddPage = state.settings.homePages < LauncherSettings.HOME_PAGE_LIMIT,
-                cellsOnPage = { page ->
-                    val cells = state.settings.grid.cellsOfPage(page)
-                    (state.homeApps.keys + state.settings.widgetCells())
-                        .filter { it in cells }
-                        .toSet()
-                },
-                onSelectPage = { page ->
-                    // Tapping the page already showing leaves things as they
-                    // are: the strip is for moving about, not for leaving.
-                    if (page != state.homePage) viewModel.setHomePage(page)
-                },
-                onAddPage = viewModel::addHomePageAtEnd,
-                onAddPageLeft = viewModel::addHomePageAtStart,
-                onRemovePage = viewModel::removeHomePage,
-                onMovePage = viewModel::moveHomePage,
                 onWallpaper = viewModel::openWallpaper,
                 onWidgets = viewModel::openWidgetPage,
                 onSettings = viewModel::openSettings,
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
+
+            if (pageTarget != null) {
+                OneUiScrim(onDismiss = { pageTarget = null })
+            }
+
+            pageTarget?.let { target ->
+                PageOptions(
+                    page = target.page,
+                    pageCount = state.settings.homePages,
+                    anchor = target.anchor,
+                    hasContent = state.settings.grid.cellsOfPage(target.page).any { cell ->
+                        cell in state.homeApps || cell in state.settings.widgetCells()
+                    },
+                    isMainPage = target.page == state.settings.mainHomePage,
+                    onSetMainPage = { viewModel.setMainHomePage(target.page) },
+                    onRemovePage = viewModel::removeHomePage,
+                    onDismiss = { pageTarget = null },
+                )
+            }
         }
 
         // The handles a selected widget wears. They are drawn above the dim and
@@ -732,6 +778,16 @@ fun LauncherScreen(
                     viewModel.addToDock(target.app)
                     actionTarget = null
                 }
+            },
+            // Dock apps keep their actions first; this is the way from one of
+            // them into the home screen's own edit mode.
+            onEditHome = if (target.area == DragArea.DOCK) {
+                {
+                    actionTarget = null
+                    viewModel.setEditing(true)
+                }
+            } else {
+                null
             },
             // Only offered where the icon was actually pressed: on the screen it
             // is pinned to.
@@ -927,6 +983,9 @@ private data class ActionTarget(
 
 /** The widget whose card is showing, and where it is. */
 private data class WidgetTarget(val cell: Int, val anchor: Rect)
+
+/** The page whose options are showing, and where on the page it was asked for. */
+private data class PageTarget(val page: Int, val anchor: Rect)
 
 /** What to call a widget in its own actions card: its app's name. */
 private fun providerLabel(context: Context, placement: WidgetPlacement): String {

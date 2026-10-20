@@ -112,6 +112,12 @@ data class LauncherSettings(
     val homeItems: Map<Int, String> = emptyMap(),
     /** How many home screen pages there are, swiped through left to right. */
     val homePages: Int = 1,
+    /**
+     * The page the launcher opens on, and the one the system Home action
+     * returns to. It is a page in its own right; swiping to another page does
+     * not move it.
+     */
+    val mainHomePage: Int = 0,
     /** Home screen widgets, keyed by the top left cell each one occupies. */
     val widgets: Map<Int, WidgetPlacement> = emptyMap(),
     /** Dock slots: slot index to [AppInfo.key]. Missing slots are empty. */

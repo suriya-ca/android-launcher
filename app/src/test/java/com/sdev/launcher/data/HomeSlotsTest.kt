@@ -146,6 +146,47 @@ class HomeSlotsTest {
     }
 
     @Test
+    fun `a home icon moved to the dock takes a free slot and leaves the dock alone`() {
+        val home = mutableMapOf(0 to "app.home")
+        val dock = mutableMapOf(0 to "app.one", 1 to "app.two")
+
+        // Slot 1 is under the finger but taken, so the icon goes to the next
+        // free one. The app already there stays put - this is not a swap.
+        assertEquals(2, moveHomeCellToDock(home, dock, 0, capacity = 5, preferred = 1))
+        assertEquals(emptyMap<Int, String>(), home)
+        assertEquals(mapOf(0 to "app.one", 1 to "app.two", 2 to "app.home"), dock)
+    }
+
+    @Test
+    fun `a home icon moves into the dock slot under the finger when it is free`() {
+        val home = mutableMapOf(4 to "app.home")
+        val dock = mutableMapOf(0 to "app.one")
+
+        assertEquals(3, moveHomeCellToDock(home, dock, 4, capacity = 5, preferred = 3))
+        assertEquals(mapOf(0 to "app.one", 3 to "app.home"), dock)
+    }
+
+    @Test
+    fun `a full dock keeps the icon on the home screen`() {
+        val home = mutableMapOf(0 to "app.home")
+        val dock = mutableMapOf(0 to "app.one", 1 to "app.two", 2 to "app.three")
+
+        assertNull(moveHomeCellToDock(home, dock, 0, capacity = 3, preferred = 1))
+        assertEquals(mapOf(0 to "app.home"), home)
+        assertEquals(mapOf(0 to "app.one", 1 to "app.two", 2 to "app.three"), dock)
+    }
+
+    @Test
+    fun `moving a home copy into the dock drops the duplicate`() {
+        val home = mutableMapOf(7 to "app.same")
+        val dock = mutableMapOf(1 to "app.same")
+
+        assertEquals(1, moveHomeCellToDock(home, dock, 7, capacity = 5, preferred = 3))
+        assertEquals(emptyMap<Int, String>(), home)
+        assertEquals(mapOf(1 to "app.same"), dock)
+    }
+
+    @Test
     fun `an icon avoids the cells under a widget`() {
         // A 2x1 widget at the top left covers cells 0 and 1.
         val covered = widgetCells(grid, 0, spanX = 2, spanY = 1)

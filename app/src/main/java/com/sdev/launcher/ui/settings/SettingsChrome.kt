@@ -43,9 +43,11 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.unit.sp
+import com.sdev.launcher.ui.Glyph
 import com.sdev.launcher.ui.OneUiPopup
 import com.sdev.launcher.ui.OneUiScrim
 
@@ -248,6 +250,7 @@ internal fun SettingsRow(
     value: String? = null,
     onClick: (() -> Unit)? = null,
     onBounds: ((Rect) -> Unit)? = null,
+    leading: @Composable (() -> Unit)? = null,
     trailing: @Composable (() -> Unit)? = null,
 ) {
     val colours = MaterialTheme.colorScheme
@@ -267,6 +270,11 @@ internal fun SettingsRow(
             .padding(start = DIVIDER_INSET, end = CARD_INSET),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        if (leading != null) {
+            leading()
+            Spacer(Modifier.width(14.dp))
+        }
+
         Column(
             modifier = Modifier
                 .weight(1f)
@@ -307,6 +315,39 @@ internal fun SettingsRow(
             }
         }
     }
+}
+
+/**
+ * One of the top-level settings categories: a glyph on a tinted tile, its name,
+ * and a line saying what it is currently set to.
+ */
+@Composable
+internal fun SettingsMenuRow(
+    title: String,
+    subtitle: String,
+    glyph: Glyph,
+    onClick: () -> Unit,
+) {
+    SettingsRow(
+        title = title,
+        subtitle = subtitle,
+        onClick = onClick,
+        leading = {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center,
+            ) {
+                Glyph(
+                    glyph = glyph,
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    size = 21.dp,
+                )
+            }
+        },
+    )
 }
 
 /** A setting that is simply on or off. */
@@ -350,11 +391,11 @@ internal fun SettingsChoiceRow(
 
 /** The line between two settings on the same card. */
 @Composable
-internal fun SettingsDivider() {
+internal fun SettingsDivider(start: Dp = DIVIDER_INSET) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = DIVIDER_INSET)
+            .padding(start = start)
             .height(1.dp)
             .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
     )

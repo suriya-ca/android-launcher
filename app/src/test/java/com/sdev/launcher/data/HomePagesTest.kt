@@ -126,54 +126,29 @@ class HomePagesTest {
     }
 
     @Test
-    fun `moving a page drags everything on it along`() {
-        val perPage = grid.cellCount
-        val cells = mapOf(
-            0 to "first",
-            perPage + 3 to "second",
-            perPage * 2 + 7 to "third",
-        )
-
-        // The page in the middle is carried to the front: it becomes page 0, and
-        // the page that was in front of it slides back to where it was. Each
-        // keeps its own place within its page - "first" was in cell 0 and is
-        // still in cell 0, one page along.
-        assertEquals(
-            mapOf(
-                3 to "second",
-                perPage to "first",
-                perPage * 2 + 7 to "third",
-            ),
-            movePageCells(cells, grid, from = 1, to = 0),
-        )
-
-        // And carried the other way: everything it passes shifts back a page.
-        assertEquals(
-            mapOf(
-                0 to "first",
-                perPage + 7 to "third",
-                perPage * 2 + 3 to "second",
-            ),
-            movePageCells(cells, grid, from = 1, to = 2),
-        )
+    fun `adding a page keeps the same page main`() {
+        // Putting a page in front of the main one shifts it along with
+        // everything else; adding one after it leaves it alone.
+        assertEquals(1, mainPageAfterInsert(mainPage = 0, at = 0))
+        assertEquals(3, mainPageAfterInsert(mainPage = 2, at = 2))
+        assertEquals(2, mainPageAfterInsert(mainPage = 2, at = 3))
     }
 
     @Test
-    fun `a page moved onto itself changes nothing`() {
-        val cells = mapOf(0 to "a", grid.cellCount + 1 to "b")
-
-        assertEquals(cells, movePageCells(cells, grid, from = 0, to = 0))
+    fun `removing a page keeps the same page main where it can`() {
+        // A page before the main one takes a page off its index; one after it
+        // changes nothing.
+        assertEquals(1, mainPageAfterRemove(mainPage = 2, page = 1, pages = 4))
+        assertEquals(2, mainPageAfterRemove(mainPage = 2, page = 3, pages = 4))
     }
 
     @Test
-    fun `everything keeps its own place within its page`() {
-        val perPage = grid.cellCount
-
-        // Cell 5 on page 0 and cell 19 on page 1, with page 0 carried to the
-        // back: only the page a cell is on changes.
-        assertEquals(
-            mapOf(perPage + 5 to "a", 19 to "b"),
-            movePageCells(mapOf(5 to "a", perPage + 19 to "b"), grid, from = 0, to = 1),
-        )
+    fun `removing the main page promotes the page that takes its place`() {
+        // The next page slides into the gap, so it becomes main. When the main
+        // page was the last one there is no next page, and the one before it
+        // takes over.
+        assertEquals(1, mainPageAfterRemove(mainPage = 1, page = 1, pages = 3))
+        assertEquals(1, mainPageAfterRemove(mainPage = 2, page = 2, pages = 3))
+        assertEquals(0, mainPageAfterRemove(mainPage = 0, page = 0, pages = 1))
     }
 }

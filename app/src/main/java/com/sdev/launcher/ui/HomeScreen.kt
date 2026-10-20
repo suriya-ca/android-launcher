@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
@@ -65,6 +66,7 @@ import com.sdev.launcher.data.HomeArea
 import com.sdev.launcher.data.HomeGrid
 import com.sdev.launcher.data.LauncherSettings
 import com.sdev.launcher.data.WidgetPlacement
+import com.sdev.launcher.data.findFreeCell
 import com.sdev.launcher.data.findNearestWidgetCell
 import com.sdev.launcher.data.widgetCells
 import kotlin.math.abs
@@ -97,9 +99,9 @@ private const val SHADE_SWIPE_TIMEOUT_MS = 500L
  *
  * Icons are placed by hand rather than by a layout that scrolls, because a cell
  * has to mean something stable while it is being dragged between cells.
- * Long-pressing empty space offers the home options, long-pressing an icon and
- * letting go offers that app's actions, and a swipe down asks for the
- * notification shade.
+ * Long-pressing empty space enters edit mode, and long-pressing it there asks
+ * what should happen to the page; long-pressing an icon and letting go offers
+ * that app's actions, and a swipe down asks for the notification shade.
  *
  * Where the cells are is published to [dropArea] as it is laid out, and the
  * cells a drag would land in are asked of it: the drag that places an icon is
@@ -120,8 +122,10 @@ fun HomeScreen(
     active: Boolean,
     page: Int,
     onPageChange: (Int) -> Unit,
-    onEmptyLongPress: () -> Unit,
+    onEmptyLongPress: (Offset) -> Unit,
     onEmptyTap: () -> Unit,
+    onAddPageStart: () -> Unit,
+    onAddPageEnd: () -> Unit,
     onWidgetLongPress: (WidgetPlacement, Rect) -> Unit,
     onWidgetSelect: (Int) -> Unit,
     onDragStart: () -> Unit,
@@ -149,38 +153,92 @@ fun HomeScreen(
     var homeAt by remember { mutableStateOf<LayoutCoordinates?>(null) }
 
     val pages = settings.homePages
-    val pagePagerState = rememberPagerState(pageCount = { pages })
+
+    // The edit mode makes room at both ends for a page that does not exist yet.
+    // Those are pager pages, not home screen pages: every real page is one step
+    // in from the left while they are showing.
+    val showAddPages = editing && pages < LauncherSettings.HOME_PAGE_LIMIT
+    val pagerCount = pages + if (showAddPages) 2 else 0
+
+    fun pagerPageOf(homePage: Int): Int = if (showAddPages) homePage + 1 else homePage
+
+    fun homePageOf(pagerPage: Int): Int? = if (showAddPages) {
+        (pagerPage - 1).takeIf { it in 0 until pages }
+    } else {
+        pagerPage.takeIf { it in 0 until pages }
+    }
+
+    // The pager is rebuilt when the add-page outlines come and go, so that the
+    // page under the finger stays the same page instead of everything shifting
+    // along underneath it. Everything else about the home screen is kept.
+    val pagePagerState = key(showAddPages) {
+        rememberPagerState(
+            initialPage = pagerPageOf(page).coerceIn(0, pagerCount - 1),
+            pageCount = { pagerCount },
+        )
+    }
 
     // The ViewModel says which page should be showing - it moves the home
     // screen when an app is pinned to another page...
-    LaunchedEffect(page) {
-        if (pagePagerState.currentPage != page) pagePagerState.animateScrollToPage(page)
+    LaunchedEffect(page, editing, pages) {
+        val target = pagerPageOf(page).coerceIn(0, pagerCount - 1)
+        if (pagePagerState.currentPage != target) pagePagerState.animateScrollToPage(target)
     }
 
-    // ...and the pager reports back the page the user turned to.
-    LaunchedEffect(pagePagerState) {
+    // ...and the pager reports back the real page the user turned to. The
+    // add-page outlines are not pages the ViewModel knows about.
+    LaunchedEffect(pagePagerState, editing, pages) {
         snapshotFlow { pagePagerState.settledPage }
             .distinctUntilChanged()
-            .collect(onPageChange)
+            .collect { pagerPage ->
+                homePageOf(pagerPage)?.let(onPageChange)
+            }
     }
 
     // A separate collector for the page being turned to, so a drop counts
     // against the page coming in rather than the one it is leaving.
-    LaunchedEffect(pagePagerState, dropArea) {
+    LaunchedEffect(pagePagerState, dropArea, editing, pages) {
         snapshotFlow { pagePagerState.currentPage }
             .distinctUntilChanged()
-            .collect { dropArea.page = it }
+            .collect { pagerPage ->
+                homePageOf(pagerPage)?.let { dropArea.page = it }
+            }
     }
 
     val drag = controller.drag
     val widgetDrag = controller.widgetDrag
     val moved = controller.moved
 
+    // The apps actually in the dock, in the order they are drawn. Empty slots
+    // are left out, so a drop is aimed at one of these rather than at a gap.
+    val dockTargets = state.dockApps.keys.sorted()
+
     // The band along the top that brings the home screen out of another page.
     val band = with(density) { DRAWER_PULL_ZONE.toPx() }
 
     val dropSlot = if (moved) {
-        drag?.let { dropArea.dockSlotAt(it.position, enabled = !editing) }
+        drag?.let {
+            val target = dropArea.dockSlotAt(it.position, dockTargets, enabled = !editing)
+
+            when {
+                target == null -> null
+
+                // Moving within the dock swaps with the app under the finger,
+                // so that app is what to mark out.
+                it.area == DragArea.DOCK -> target
+
+                // Coming from home or the drawer lands in a free slot instead,
+                // so the mark has to sit where it will actually go.
+                else -> state.dockApps.entries
+                    .firstOrNull { (_, app) -> app.key == it.app.key }
+                    ?.key
+                    ?: findFreeCell(
+                        occupied = state.dockApps.keys,
+                        capacity = settings.dockSlots,
+                        preferred = target,
+                    )
+            }
+        }
     } else {
         null
     }
@@ -265,7 +323,7 @@ fun HomeScreen(
             return cell !in state.homeApps && cell !in state.settings.widgetCells()
         }
 
-        val slot = dropArea.dockSlotAt(position, enabled = !editing)
+        val slot = dropArea.dockSlotAt(position, dockTargets, enabled = !editing)
         if (slot != null) return slot !in state.dockApps
 
         return true
@@ -278,6 +336,8 @@ fun HomeScreen(
         dropArea.shape = settings.grid
         dropArea.scale = editScale
     }
+
+    val showingAddPage = homePageOf(pagePagerState.currentPage) == null
 
     Box(
         modifier = modifier
@@ -294,15 +354,25 @@ fun HomeScreen(
                 state.dockApps,
                 state.settings.widgets,
                 state.settings.homeItems,
+                showingAddPage,
             ) {
                 detectTapGestures(
                     onTap = { position ->
-                        val at = homeAt?.localToRoot(position)
-                        if (at != null && isEmptyCell(at)) onEmptyTap()
+                        // An add-page outline's button swallows its own tap;
+                        // everything around it is empty space and puts the
+                        // edit mode away.
+                        if (showingAddPage) {
+                            onEmptyTap()
+                        } else {
+                            val at = homeAt?.localToRoot(position)
+                            if (at != null && isEmptyCell(at)) onEmptyTap()
+                        }
                     },
                     onLongPress = { position ->
-                        val at = homeAt?.localToRoot(position)
-                        if (at != null && isEmptyCell(at)) onEmptyLongPress()
+                        if (!showingAddPage) {
+                            val at = homeAt?.localToRoot(position)
+                            if (at != null && isEmptyCell(at)) onEmptyLongPress(at)
+                        }
                     },
                 )
             }
@@ -338,8 +408,8 @@ fun HomeScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .safeDrawingPadding()
-                // Room along the bottom for the edit mode's strip and buttons,
-                // which is outside the scaled part.
+                // Room along the bottom for the edit mode's buttons, which is
+                // outside the scaled part.
                 .padding(bottom = if (editing) EDIT_MODE_HEIGHT else 0.dp)
                 .graphicsLayer {
                     scaleX = editScale
@@ -380,65 +450,89 @@ fun HomeScreen(
                     // of the screen is what does that.
                     userScrollEnabled = !controller.active,
                     modifier = Modifier.fillMaxSize(),
-                ) { homePage ->
-                    Box(modifier = Modifier.fillMaxSize()) {
-                        // The page's own outline, while the home screen is being
-                        // rearranged: it says where one page stops and the next
-                        // one starts, and it is drawn inside the page so that it
-                        // travels with it - mid-swipe both edges can be seen.
-                        if (editing) PageFrame()
+                ) { pagerPage ->
+                    val homePage = homePageOf(pagerPage)
 
-                        HomeGrid(
-                            state = state,
-                            page = homePage,
-                            iconSize = iconSize,
-                            controller = controller,
-                            handlers = handlers,
-                            drag = drag,
-                            reveal = state.revealCell,
-                            active = active,
-                            onRevealShown = onRevealShown,
+                    if (homePage == null) {
+                        // The place a page would go. It is drawn as a page so
+                        // that the shape of the home screen says where the new
+                        // one will appear.
+                        AddPageOutline(
+                            label = stringResource(R.string.edit_add_page),
+                            description = stringResource(
+                                if (pagerPage == 0) {
+                                    R.string.edit_add_page_left
+                                } else {
+                                    R.string.edit_add_page_right
+                                },
+                            ),
+                            onClick = if (pagerPage == 0) onAddPageStart else onAddPageEnd,
+                            modifier = Modifier.fillMaxSize(),
                         )
+                    } else {
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            // The page's own outline, while the home screen is
+                            // being rearranged: it says where one page stops and
+                            // the next one starts, and it is drawn inside the
+                            // page so that it travels with it - mid-swipe both
+                            // edges can be seen.
+                            if (editing) PageFrame()
 
-                        WidgetLayer(
-                            state = state,
-                            page = homePage,
-                            widgetHost = widgetHost,
-                            cellWidth = cellWidth,
-                            cellHeight = cellHeight,
-                            controller = controller,
-                            onLongPress = onWidgetLongPress,
-                            onSelect = onWidgetSelect,
-                            onDragStart = onDragStart,
-                            onDrop = onWidgetDrop,
-                            revealed = active && state.revealWidget != null,
-                            onRevealShown = onWidgetRevealShown,
-                            onEditingTap = onEmptyTap,
-                        )
-
-                        // Where the thing in the air would land. This is drawn
-                        // last on the page, and so over the widgets as well: a
-                        // widget is an opaque view of its own, and a hint painted
-                        // underneath one is a hint nobody can see.
-                        if (moved) {
-                            DropGridOverlay(
-                                grid = settings.grid,
+                            HomeGrid(
+                                state = state,
                                 page = homePage,
-                                dropCells = dropCells,
-                                dropAllowed = dropAllowed,
+                                iconSize = iconSize,
+                                controller = controller,
+                                handlers = handlers,
+                                drag = drag,
+                                reveal = state.revealCell,
+                                active = active,
+                                onRevealShown = onRevealShown,
                             )
+
+                            WidgetLayer(
+                                state = state,
+                                page = homePage,
+                                widgetHost = widgetHost,
+                                cellWidth = cellWidth,
+                                cellHeight = cellHeight,
+                                controller = controller,
+                                onLongPress = onWidgetLongPress,
+                                onSelect = onWidgetSelect,
+                                onDragStart = onDragStart,
+                                onDrop = onWidgetDrop,
+                                revealed = active && state.revealWidget != null,
+                                onRevealShown = onWidgetRevealShown,
+                                onEditingTap = onEmptyTap,
+                            )
+
+                            // Where the thing in the air would land. This is
+                            // drawn last on the page, and so over the widgets as
+                            // well: a widget is an opaque view of its own, and a
+                            // hint painted underneath one is a hint nobody can
+                            // see.
+                            if (moved) {
+                                DropGridOverlay(
+                                    grid = settings.grid,
+                                    page = homePage,
+                                    dropCells = dropCells,
+                                    dropAllowed = dropAllowed,
+                                )
+                            }
                         }
                     }
                 }
             }
 
-            // The dots say which page is showing; in the edit mode the strip of
-            // page thumbnails says it instead, and the dock gives up its place
-            // to the buttons.
-            if (pages > 1 && !editing && !moved) {
+            // The dots say which page is showing. They are kept in edit mode
+            // too: with the page thumbnails gone they are the only thing left
+            // that says where among the pages this one sits. While an add-page
+            // outline is on screen no real page is selected.
+            if (pages > 1 && !moved) {
                 PageDots(
                     pageCount = pages,
-                    currentPage = pagePagerState.currentPage,
+                    currentPage = homePageOf(pagePagerState.currentPage) ?: -1,
+                    mainPage = settings.mainHomePage,
                 )
             }
 
@@ -446,7 +540,6 @@ fun HomeScreen(
                 HomeDock(
                     state = state,
                     iconSize = iconSize,
-                    dockSlots = settings.dockSlots,
                     controller = controller,
                     handlers = handlers,
                     drag = drag,
@@ -469,16 +562,15 @@ fun HomeScreen(
                 .toSet()
         }
 
-        // The edit mode's own strip and buttons are drawn above the pages, up in
-        // the launcher, so that they are never under the menu the pages are
-        // holding open.
+        // The edit mode's buttons are drawn above the pages, up in the launcher,
+        // so that they are never under the menu the pages are holding open.
 
         // While something is being carried, the pages appear along the bottom so
         // that it can be put down on another one.
         if (moved && pages > 1 && !editing) {
             DragPageStrip(
                 pages = pages,
-                currentPage = pagePagerState.currentPage,
+                currentPage = homePageOf(pagePagerState.currentPage) ?: 0,
                 rows = settings.grid.rows,
                 targetPage = (drag?.position ?: widgetDrag?.position)?.let {
                     controller.dragPageAt(it)
@@ -605,7 +697,6 @@ private fun HomeGrid(
 private fun HomeDock(
     state: LauncherUiState,
     iconSize: Dp,
-    dockSlots: Int,
     controller: IconDragController,
     handlers: IconGestureHandlers,
     drag: DragState?,
@@ -615,9 +706,16 @@ private fun HomeDock(
     onRevealShown: () -> Unit,
     onBounds: (LayoutCoordinates) -> Unit,
 ) {
+    val dockIconSize = iconSize - 4.dp
+    // The icon plus the padding inside and around the bar. The dock keeps this
+    // height even when every slot is empty, so an empty dock is still a dock
+    // rather than a thin strip of background.
+    val dockMinHeight = dockIconSize + 28.dp
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .heightIn(min = dockMinHeight)
             .padding(horizontal = 8.dp, vertical = 6.dp)
             .clip(RoundedCornerShape(28.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f))
@@ -627,15 +725,17 @@ private fun HomeDock(
             .onGloballyPositioned { onBounds(it) },
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        repeat(dockSlots) { index ->
+        // Only the apps that are there are drawn, each with the same share of
+        // the width. Empty slots are not gaps in the row.
+        state.dockApps.entries.sortedBy { it.key }.forEach { (index, app) ->
             val held = drag?.let { it.area == DragArea.DOCK && it.index == index } == true
 
             HomeCell(
-                app = state.dockApps[index],
+                app = app,
                 area = HomeArea.DOCK,
                 index = index,
                 state = state,
-                iconSize = iconSize - 4.dp,
+                iconSize = dockIconSize,
                 controller = controller,
                 handlers = handlers,
                 // The dock's slots show themselves as soon as something is in
@@ -814,9 +914,6 @@ private fun BoxScope.WidgetFlash(onDone: () -> Unit) {
     )
 }
 
-/** How far the edit mode's page frame is pulled in from the grid it surrounds. */
-private val PAGE_FRAME_INSET = 10.dp
-
 /**
  * The outline a page wears while the home screen is being rearranged: a rounded
  * frame, faintly filled, around the whole grid.
@@ -829,7 +926,7 @@ private val PAGE_FRAME_INSET = 10.dp
 @Composable
 private fun BoxScope.PageFrame() {
     val colours = MaterialTheme.colorScheme
-    val shape = RoundedCornerShape(28.dp)
+    val shape = RoundedCornerShape(PAGE_FRAME_CORNER)
 
     Box(
         modifier = Modifier

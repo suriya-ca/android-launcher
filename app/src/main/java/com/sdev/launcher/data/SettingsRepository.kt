@@ -30,6 +30,7 @@ class SettingsRepository(context: Context) {
 
     val settings: Flow<LauncherSettings> = dataStore.data.map { prefs ->
         val dockCount = dockSlotsOf(prefs)
+        val pages = homePages(prefs)
         LauncherSettings(
             drawerColumns = (prefs[KEY_DRAWER_COLUMNS] ?: LauncherSettings.DEFAULT_DRAWER_COLUMNS)
                 .coerceIn(3, 6),
@@ -51,7 +52,8 @@ class SettingsRepository(context: Context) {
             swipeDownNotifications = prefs[KEY_SWIPE_NOTIFICATIONS] ?: true,
             hiddenApps = prefs[KEY_HIDDEN_APPS].orEmpty(),
             homeItems = homeItemsOf(prefs),
-            homePages = homePages(prefs),
+            homePages = pages,
+            mainHomePage = mainHomePage(prefs),
             widgets = widgetsOf(prefs),
             dockItems = decodeSlots(prefs[KEY_DOCK_ITEMS], dockCount),
         )
@@ -114,6 +116,11 @@ class SettingsRepository(context: Context) {
         )
     }
 
+    /** Says which page the launcher should open on and return to. */
+    suspend fun setMainHomePage(page: Int) = write { prefs ->
+        prefs[KEY_MAIN_HOME_PAGE] = page.coerceIn(0, homePages(prefs) - 1)
+    }
+
     /**
      * Moves the icon at [fromArea]/[fromIndex] to [toArea]/[toIndex], swapping
      * whatever was there back into the hole it leaves behind.
@@ -130,6 +137,23 @@ class SettingsRepository(context: Context) {
 
         fromMap[fromIndex] = toMap[toIndex] ?: ""
         toMap[toIndex] = moving
+    }
+
+    /**
+     * Moves the icon at [fromIndex] on the home screen into the dock, near
+     * [preferred] when that slot is free and into the nearest free one when it
+     * is not. The home cell is left empty; nothing already in the dock moves.
+     *
+     * Returns the dock slot the icon landed in, or null when the dock is full.
+     */
+    suspend fun moveHomeItemToDock(fromIndex: Int, preferred: Int?): Int? {
+        var placed: Int? = null
+
+        mutateSlots { _, dockCapacity, home, dock, _ ->
+            placed = moveHomeCellToDock(home, dock, fromIndex, dockCapacity, preferred)
+        }
+
+        return placed
     }
 
     /** Empties one home screen cell. */
@@ -189,8 +213,10 @@ class SettingsRepository(context: Context) {
         val pages = homePages(prefs)
         if (pages >= LauncherSettings.HOME_PAGE_LIMIT) return@write
 
+        val insert = at.coerceIn(0, pages)
+        val main = mainHomePage(prefs)
         val grid = gridOf(prefs)
-        val first = at.coerceIn(0, pages) * grid.cellCount
+        val first = insert * grid.cellCount
         val home = homeItemsOf(prefs)
         val widgets = widgetsOf(prefs)
 
@@ -201,25 +227,7 @@ class SettingsRepository(context: Context) {
             },
         )
         prefs[KEY_HOME_PAGES] = pages + 1
-    }
-
-    /**
-     * Moves page [from] to page [to], carrying its icons and widgets with it and
-     * letting the pages in between slide across. The number of pages does not
-     * change.
-     */
-    suspend fun moveHomePage(from: Int, to: Int) = write { prefs ->
-        val pages = homePages(prefs)
-        if (from !in 0 until pages || to !in 0 until pages || from == to) return@write
-
-        val grid = gridOf(prefs)
-        val home = homeItemsOf(prefs)
-        val widgets = widgetsOf(prefs)
-
-        prefs[KEY_HOME_ITEMS] = encodeSlots(movePageCells(home, grid, from, to))
-        prefs[KEY_WIDGETS] = encodeWidgets(
-            movePageCells(widgets, grid, from, to).mapValues { (cell, widget) -> widget.at(cell) },
-        )
+        prefs[KEY_MAIN_HOME_PAGE] = mainPageAfterInsert(main, insert)
     }
 
     /**
@@ -237,6 +245,7 @@ class SettingsRepository(context: Context) {
             val pages = homePages(prefs)
             if (pages <= 1 || page !in 0 until pages) return@writeAndRelease
 
+            val main = mainHomePage(prefs)
             val grid = gridOf(prefs)
             val cells = grid.cellsOfPage(page)
             val home = homeItemsOf(prefs)
@@ -253,6 +262,11 @@ class SettingsRepository(context: Context) {
                 gone.mapValues { (cell, widget) -> widget.at(cell) },
             )
             prefs[KEY_HOME_PAGES] = pages - 1
+            prefs[KEY_MAIN_HOME_PAGE] = mainPageAfterRemove(
+                mainPage = main,
+                page = page,
+                pages = pages,
+            )
         }
 
         return dropped + released
@@ -457,6 +471,10 @@ class SettingsRepository(context: Context) {
     private fun homePages(prefs: Preferences): Int =
         (prefs[KEY_HOME_PAGES] ?: 1).coerceIn(1, LauncherSettings.HOME_PAGE_LIMIT)
 
+    /** The main page, kept inside the pages that actually exist. */
+    private fun mainHomePage(prefs: Preferences): Int =
+        (prefs[KEY_MAIN_HOME_PAGE] ?: 0).coerceIn(0, homePages(prefs) - 1)
+
     /** How many rows the grid in use has. */
     private fun homeRowsOf(prefs: Preferences): Int =
         (prefs[KEY_HOME_ROWS] ?: LauncherSettings.HOME_ROWS).coerceIn(
@@ -562,6 +580,7 @@ class SettingsRepository(context: Context) {
         val KEY_HIDDEN_APPS = stringSetPreferencesKey("hidden_apps")
         val KEY_HOME_ITEMS = stringPreferencesKey("home_items")
         val KEY_HOME_PAGES = intPreferencesKey("home_pages")
+        val KEY_MAIN_HOME_PAGE = intPreferencesKey("main_home_page")
 
         /** How many rows the home screen grid has. */
         val KEY_HOME_ROWS = intPreferencesKey("home_rows")
