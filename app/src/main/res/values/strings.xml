@@ -30,15 +30,34 @@
     <string name="edit_page_remove_title">Remove page?</string>
     <string name="edit_page_remove_message">Everything on it will be removed as well.</string>
     <string name="edit_page_remove_confirm">Remove</string>
+    <string name="edit_lock_home">Lock home screen</string>
     <string name="cancel">Cancel</string>
     <string name="close">Close</string>
+
+    <string name="home_locked_title">Home screen is locked</string>
+    <string name="home_locked_message">Unlock it in Home screen settings to move apps, folders and widgets.</string>
+    <string name="home_locked_settings">Home screen settings</string>
+    <string name="home_locked_toast">Home screen locked</string>
 
     <string name="folder_default_name">Folder</string>
     <string name="folder_rename">Rename folder</string>
     <string name="folder_rename_confirm">Rename</string>
+    <string name="folder_rename_hint">Leave blank to use a default name</string>
     <string name="folder_remove">Remove folder</string>
     <string name="folder_remove_from_folder">Remove from folder</string>
     <string name="folder_home_only">Folders stay on the home screen</string>
+    <string name="folder_empty">This folder is empty</string>
+    <string name="folder_empty_hint">Drag apps onto it to add them</string>
+    <string name="folder_drop_to_add">Release to add to folder</string>
+    <string name="folder_more_apps">+%1$d</string>
+    <plurals name="folder_apps_count">
+        <item quantity="one">%1$d app</item>
+        <item quantity="other">%1$d apps</item>
+    </plurals>
+    <plurals name="folder_icon_description">
+        <item quantity="one">Folder, %1$d app</item>
+        <item quantity="other">Folder, %1$d apps</item>
+    </plurals>
 
     <string name="home_full">The home screen is full</string>
     <string name="widget_picker_title">Widgets</string>
@@ -93,6 +112,9 @@
         <item quantity="one">%1$d row</item>
         <item quantity="other">%1$d rows</item>
     </plurals>
+    <string name="settings_home_lock">Home screen lock</string>
+    <string name="settings_home_lock_title">Lock home screen</string>
+    <string name="settings_home_lock_hint">Prevent apps, folders, widgets and pages from being moved by accident</string>
     <string name="settings_swipe_notifications">Swipe down for notifications</string>
     <string name="settings_swipe_notifications_hint">Swiping down on the home screen opens the notification shade</string>
     <string name="settings_swipe_notifications_enable">Allow the swipe</string>

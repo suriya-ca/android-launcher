@@ -429,18 +429,45 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     /** Opens the launcher's own settings screen, from wherever it was asked for. */
-    fun openSettings() {
+    fun openSettings(page: String? = null) {
         val context = getApplication<Application>()
 
         runCatching {
             context.startActivity(
                 Intent(context, SettingsActivity::class.java)
+                    .apply { if (page != null) putExtra(SettingsActivity.EXTRA_PAGE, page) }
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             )
         }
 
         setDrawerOpen(false)
         _state.update { it.copy(editing = false) }
+    }
+
+    /** Opens the settings page that holds the home screen's lock. */
+    fun openHomeSettings() = openSettings(SettingsActivity.PAGE_HOME)
+
+    /**
+     * Locks the home screen against rearrangement, or unlocks it.
+     *
+     * Locking is only ever done while the home screen is being rearranged, so
+     * the edit mode is left at the same time; the lock is what prevents it from
+     * being entered again for as long as it is on.
+     */
+    fun setHomeLocked(locked: Boolean) {
+        viewModelScope.launch {
+            settingsRepository.setHomeLocked(locked)
+
+            if (locked) {
+                _state.update { it.copy(editing = false, openFolder = null) }
+
+                Toast.makeText(
+                    getApplication(),
+                    getApplication<Application>().getString(R.string.home_locked_toast),
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
     }
 
     /** Hands over to the system's wallpaper chooser. */

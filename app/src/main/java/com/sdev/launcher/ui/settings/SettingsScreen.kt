@@ -45,12 +45,13 @@ internal typealias ChoiceOpener = (List<String>, Int, (Int) -> Unit) -> (Rect) -
 private val MENU_DIVIDER_INSET = 74.dp
 
 @Composable
-fun SettingsScreen(
+internal fun SettingsScreen(
     viewModel: SettingsViewModel,
     onBack: () -> Unit,
+    initialDestination: SettingsDestination = SettingsDestination.MENU,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    var route by rememberSaveable { mutableStateOf(SettingsDestination.MENU.name) }
+    var route by rememberSaveable { mutableStateOf(initialDestination.name) }
     val destination = SettingsDestination.valueOf(route)
     var choice by remember { mutableStateOf<SettingsChoice?>(null) }
 

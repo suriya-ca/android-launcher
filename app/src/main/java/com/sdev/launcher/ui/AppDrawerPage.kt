@@ -244,6 +244,9 @@ private fun AppGridPage(
                             iconSize = state.settings.iconSize.sizeDp.dp,
                             showLabel = state.settings.showLabels,
                             badgeCount = badgeCount,
+                            // A locked home screen cannot be added to, so an
+                            // icon in the drawer has nowhere to be carried.
+                            movable = !state.settings.homeLocked,
                         )
                     }
                 }
@@ -300,6 +303,7 @@ private fun ScrollingApps(
                 iconSize = state.settings.iconSize.sizeDp.dp,
                 showLabel = state.settings.showLabels,
                 badgeCount = badgeCount,
+                movable = !state.settings.homeLocked,
             )
         }
     }

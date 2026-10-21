@@ -5,6 +5,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.app.Activity
 import android.content.Context
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -38,6 +41,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
@@ -47,11 +51,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.toSize
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.sdev.launcher.R
 import com.sdev.launcher.data.AppInfo
 import com.sdev.launcher.data.HomeArea
 import com.sdev.launcher.data.WidgetPlacement
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
@@ -66,6 +72,9 @@ private const val PAGE_COUNT = 2
  * again. A short flick is still only allowed to turn one page at a time.
  */
 private const val SWIPE_THRESHOLD = 0.15f
+
+/** How long a folder's panel takes to open or close, in milliseconds. */
+private const val FOLDER_PANEL_EXIT_MS = 200
 
 /**
  * The launcher is two full pages stacked vertically:
@@ -126,6 +135,23 @@ fun LauncherScreen(
     var folderBounds by remember { mutableStateOf<Rect?>(null) }
     var folderMembers by remember { mutableStateOf<Map<Int, Rect>>(emptyMap()) }
 
+    // Where the folder icon that was tapped is, so that its panel can grow out
+    // of it rather than simply appear in the middle of the screen.
+    var folderIcon by remember { mutableStateOf(Rect.Zero) }
+
+    // The folder the panel is showing. It outlives the open folder by the time
+    // the panel takes to close, so the card can be seen on its way out rather
+    // than disappearing between one frame and the next.
+    var shownFolder by remember { mutableStateOf<FolderEntry?>(null) }
+
+    // The size of the whole screen, for turning the folder icon's place into
+    // the scale origin the opening animation grows from.
+    var rootSize by remember { mutableStateOf(Size.Zero) }
+
+    // Where the last long press happened while the home screen was locked. The
+    // card that explains the lock hangs off it.
+    var lockedHint by remember { mutableStateOf<Rect?>(null) }
+
     // The one drag in flight, shared by both pages.
     val dragController = remember { IconDragController() }
 
@@ -148,6 +174,24 @@ fun LauncherScreen(
         }
     }
 
+    // The panel keeps its folder while it closes. A folder that has gone - it
+    // was removed, or the last app in it was - puts the panel away in the same
+    // way as a tap outside it does.
+    val liveFolder = state.openFolder?.let(state::folder)
+
+    LaunchedEffect(liveFolder) {
+        if (liveFolder != null) {
+            shownFolder = liveFolder
+        } else {
+            delay(FOLDER_PANEL_EXIT_MS.toLong())
+            if (state.openFolder == null) shownFolder = null
+        }
+    }
+
+    LaunchedEffect(state.openFolder, liveFolder) {
+        if (state.openFolder != null && liveFolder == null) viewModel.closeFolder()
+    }
+
     val band = with(LocalDensity.current) { DRAWER_PULL_ZONE.toPx() }
 
     // The system may insist on asking the user before this launcher is allowed
@@ -165,7 +209,7 @@ fun LauncherScreen(
 
     val gestures = remember(dragController, viewModel) {
         IconGestureHandlers(
-            onTap = { dragged, area ->
+            onTap = { dragged, area, bounds ->
                 // A tap on the home screen while a folder is open puts the
                 // folder away: the panel is over the page, and the page should
                 // not do something else behind it. A tap on an app in the
@@ -192,15 +236,28 @@ fun LauncherScreen(
 
                 when (dragged) {
                     is Dragged.App -> viewModel.launch(dragged.app)
-                    is Dragged.Folder -> viewModel.openFolder(dragged.folderId)
+                    is Dragged.Folder -> {
+                        folderIcon = bounds
+                        viewModel.openFolder(dragged.folderId)
+                    }
                 }
             },
             onLongPress = { dragged, area, index, anchor ->
+                val locked = viewModel.state.value.settings.homeLocked
+
                 // The card is not offered while the home screen is being
                 // rearranged: the pages are live again behind the dim so they
                 // can be swiped between, and a card over them would take the
                 // swipe. Holding an icon there still picks it up and moves it.
-                if (!viewModel.state.value.editing) {
+                //
+                // A locked home screen explains itself instead. The drawer is
+                // the exception: an app there is not on the home screen, and its
+                // own actions are still worth offering.
+                if (locked && area != DragArea.DRAWER) {
+                    actionTarget = null
+                    widgetTarget = null
+                    lockedHint = anchor
+                } else if (!viewModel.state.value.editing) {
                     // Only an icon that is pinned somewhere can be taken off
                     // again.
                     widgetTarget = null
@@ -224,7 +281,11 @@ fun LauncherScreen(
                 actionTarget = null
                 widgetTarget = null
             },
-            onDrop = { drag, position ->
+            onDrop = drop@{ drag, position ->
+                // A lock switched on mid-gesture still wins: the home screen is
+                // not rearranged while it is locked, whatever is in the air.
+                if (viewModel.state.value.settings.homeLocked) return@drop
+
                 // Which of the two ways of getting rid of it the icon was let go
                 // over, if either. An icon out of the drawer is not offered them
                 // at all, so this is null for it whatever it is let go on. The
@@ -421,6 +482,7 @@ fun LauncherScreen(
 
     BackHandler(
         enabled = pageTarget != null ||
+            lockedHint != null ||
             state.editing ||
             state.drawerOpen ||
             state.pickingWidget ||
@@ -430,6 +492,7 @@ fun LauncherScreen(
     ) {
         when {
             pageTarget != null -> pageTarget = null
+            lockedHint != null -> lockedHint = null
             state.editing -> viewModel.setEditing(false)
             actionTarget != null -> actionTarget = null
             widgetTarget != null -> widgetTarget = null
@@ -561,6 +624,7 @@ fun LauncherScreen(
                 // A finger's place is reported in the root's coordinates, so
                 // this is the space every other place has to be read against.
                 dropArea.root = it
+                rootSize = it.size.toSize()
             },
     ) {
         VerticalPager(
@@ -594,20 +658,22 @@ fun LauncherScreen(
                     page = state.homePage,
                     onPageChange = viewModel::setHomePage,
                     onEmptyLongPress = { position ->
-                        if (state.editing) {
+                        if (state.settings.homeLocked) {
+                            lockedHint = Rect(position.x, position.y, position.x, position.y)
+                        } else if (state.editing) {
                             // The page thumbnails are gone, so the page itself
                             // offers its own options where it was long pressed.
-                            if (state.settings.homePages > 1) {
-                                pageTarget = PageTarget(
-                                    page = state.homePage,
-                                    anchor = Rect(
-                                        position.x,
-                                        position.y,
-                                        position.x,
-                                        position.y,
-                                    ),
-                                )
-                            }
+                            // The card also carries the lock, which is why it is
+                            // offered even when there is only one page.
+                            pageTarget = PageTarget(
+                                page = state.homePage,
+                                anchor = Rect(
+                                    position.x,
+                                    position.y,
+                                    position.x,
+                                    position.y,
+                                ),
+                            )
                         } else {
                             viewModel.setEditing(true)
                         }
@@ -696,24 +762,92 @@ fun LauncherScreen(
             fromFolder.moved &&
             folderBounds?.contains(fromFolder.position) == false
 
-        state.openFolder?.let { folderId ->
-            val folder = state.folder(folderId)
+        val panelOpen = state.openFolder != null && liveFolder != null
+        val panelProgress by animateFloatAsState(
+            targetValue = if (panelOpen) 1f else 0f,
+            animationSpec = tween(durationMillis = FOLDER_PANEL_EXIT_MS),
+            label = "folder-panel",
+        )
+        val carryAlpha by animateFloatAsState(
+            targetValue = if (leftTheFolder) 0f else 1f,
+            animationSpec = tween(durationMillis = 140),
+            label = "folder-carry",
+        )
+        val panelDim by animateFloatAsState(
+            targetValue = if (panelOpen && !leftTheFolder) 0.32f else 0f,
+            animationSpec = tween(durationMillis = FOLDER_PANEL_EXIT_MS),
+            label = "folder-dim",
+        )
 
-            if (folder == null) {
-                // The folder is gone: it was removed, or the app in it was.
-                viewModel.closeFolder()
+        // An app from outside over the panel would join the folder; one from
+        // inside over another app would take its place. Both are said before
+        // the finger comes up.
+        val overTheFolder = fromFolder?.let { drag ->
+            drag.moved &&
+                drag.area != DragArea.FOLDER &&
+                panelOpen &&
+                folderBounds?.contains(drag.position) == true
+        } == true
+
+        val hoveredMember = fromFolder
+            ?.takeIf { it.area == DragArea.FOLDER && it.moved }
+            ?.let { drag ->
+                folderMembers.entries
+                    .firstOrNull { (index, bounds) ->
+                        index != drag.index && bounds.contains(drag.position)
+                    }
+                    ?.key
+            }
+
+        if (panelDim > 0.005f) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = panelDim)),
+            )
+        }
+
+        shownFolder?.let { folder ->
+            // The card grows out of the folder icon that was tapped. The icon
+            // is in root coordinates and the size of the root is known once the
+            // screen has been laid out; until then, the middle is the safest
+            // place for it to grow from.
+            val origin = if (rootSize.width > 0f && rootSize.height > 0f) {
+                TransformOrigin(
+                    pivotFractionX = (folderIcon.center.x / rootSize.width).coerceIn(0f, 1f),
+                    pivotFractionY = (folderIcon.center.y / rootSize.height).coerceIn(0f, 1f),
+                )
             } else {
+                TransformOrigin.Center
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        alpha = panelProgress
+                        val scale = 0.86f + 0.14f * panelProgress
+                        scaleX = scale
+                        scaleY = scale
+                        transformOrigin = origin
+                    },
+            ) {
                 FolderPanel(
                     folder = folder,
                     icons = state.icons,
                     controller = dragController,
                     handlers = gestures,
                     onDismiss = viewModel::closeFolder,
+                    onRename = { renamingFolder = folder.id },
                     onGeometry = { card, members ->
                         folderBounds = card
                         folderMembers = members
                     },
-                    alpha = if (leftTheFolder) 0f else 1f,
+                    alpha = carryAlpha,
+                    locked = state.settings.homeLocked,
+                    showLabels = state.settings.showLabels,
+                    dropTarget = overTheFolder,
+                    hoveredMember = hoveredMember,
                 )
             }
         }
@@ -774,7 +908,24 @@ fun LauncherScreen(
                     isMainPage = target.page == state.settings.mainHomePage,
                     onSetMainPage = { viewModel.setMainHomePage(target.page) },
                     onRemovePage = viewModel::removeHomePage,
+                    onLock = { viewModel.setHomeLocked(true) },
                     onDismiss = { pageTarget = null },
+                )
+            }
+        }
+
+        // Why nothing moves, offered where the finger asked. It is a card rather
+        // than a toast because it carries the way to the switch that unlocks the
+        // home screen again.
+        lockedHint?.let { anchor ->
+            OneUiScrim(onDismiss = { lockedHint = null })
+
+            OneUiPopup(anchor = anchor, onDismiss = { lockedHint = null }) {
+                LockedHint(
+                    onSettings = {
+                        lockedHint = null
+                        viewModel.openHomeSettings()
+                    },
                 )
             }
         }
@@ -919,6 +1070,9 @@ fun LauncherScreen(
                 val isOurs = target.app.componentName.packageName == context.packageName
                 val settings = state.settings
                 val pinned = target.area != null
+                // A locked home screen still offers an app's own actions, but
+                // nothing that would change what is on it.
+                val locked = settings.homeLocked
 
                 AppActionCard(
                     app = target.app,
@@ -945,14 +1099,14 @@ fun LauncherScreen(
                             actionTarget = null
                         }
                     },
-                    onAddToHome = if (pinned || settings.holdsApp(target.app.key)) {
+                    onAddToHome = if (locked || pinned || settings.holdsApp(target.app.key)) {
                         null
                     } else {                        {
                             viewModel.addToHome(target.app)
                             actionTarget = null
                         }
                     },
-                    onAddToDock = if (settings.dockItems.containsValue(target.app.key)) {
+                    onAddToDock = if (locked || settings.dockItems.containsValue(target.app.key)) {
                         null
                     } else {
                         {
@@ -962,7 +1116,7 @@ fun LauncherScreen(
                     },
                     // Dock apps keep their actions first; this is the way from one
                     // of them into the home screen's own edit mode.
-                    onEditHome = if (target.area == DragArea.DOCK) {
+                    onEditHome = if (!locked && target.area == DragArea.DOCK) {
                         {
                             actionTarget = null
                             viewModel.setEditing(true)
@@ -973,15 +1127,19 @@ fun LauncherScreen(
                     // Only offered where the icon was actually pressed: on the screen it
                     // is pinned to. An app inside a folder is not on the home
                     // screen in its own right, so it leaves the folder instead.
-                    onRemove = target.area?.takeIf { it != DragArea.FOLDER }?.let { area ->
-                        val home = if (area == DragArea.HOME) HomeArea.HOME else HomeArea.DOCK
+                    onRemove = if (locked) {
+                        null
+                    } else {
+                        target.area?.takeIf { it != DragArea.FOLDER }?.let { area ->
+                            val home = if (area == DragArea.HOME) HomeArea.HOME else HomeArea.DOCK
 
-                        {
-                            viewModel.removeFromHome(home, target.index)
-                            actionTarget = null
+                            {
+                                viewModel.removeFromHome(home, target.index)
+                                actionTarget = null
+                            }
                         }
                     },
-                    onRemoveFromFolder = if (target.area == DragArea.FOLDER) {
+                    onRemoveFromFolder = if (!locked && target.area == DragArea.FOLDER) {
                         {
                             viewModel.removeAppFromFolder(
                                 state.openFolder.orEmpty(),

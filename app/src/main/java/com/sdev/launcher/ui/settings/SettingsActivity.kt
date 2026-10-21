@@ -35,6 +35,10 @@ class SettingsActivity : ComponentActivity() {
                 SettingsScreen(
                     viewModel = viewModel,
                     onBack = { finish() },
+                    initialDestination = when (intent.getStringExtra(EXTRA_PAGE)) {
+                        PAGE_HOME -> SettingsDestination.HOME
+                        else -> SettingsDestination.MENU
+                    },
                 )
             }
         }
@@ -45,5 +49,13 @@ class SettingsActivity : ComponentActivity() {
         // The user may have just allowed the notifications gesture in the
         // system settings.
         viewModel.refreshShadeState()
+    }
+
+    companion object {
+        /** Names the settings page to open on, rather than always the menu. */
+        const val EXTRA_PAGE = "settings_page"
+
+        /** The home screen page, where the lock is turned off again. */
+        const val PAGE_HOME = "home"
     }
 }

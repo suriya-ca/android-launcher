@@ -97,6 +97,11 @@ data class LauncherSettings(
     val dockSlots: Int = DEFAULT_DOCK_SLOTS,
     /** Whether the dock is shown at the bottom of the home screen. */
     val showDock: Boolean = true,
+    /**
+     * Whether the home screen is locked against rearrangement. Apps, folders and
+     * widgets still open; only changing where they are is refused.
+     */
+    val homeLocked: Boolean = false,
     /** Whether app icon notification dots or count badges are displayed. */
     val showNotificationBadges: Boolean = true,
     /** Whether T9 numeric dial-pad search is enabled in the app drawer. */

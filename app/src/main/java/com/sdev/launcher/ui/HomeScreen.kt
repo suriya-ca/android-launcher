@@ -686,6 +686,7 @@ private fun HomeGrid(
                         dimmed = held,
                         revealed = active && reveal == Pair(HomeArea.HOME, index),
                         onRevealShown = onRevealShown,
+                        movable = !state.settings.homeLocked,
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -748,6 +749,7 @@ private fun HomeDock(
                 revealed = active && reveal == Pair(HomeArea.DOCK, index),
                 onRevealShown = onRevealShown,
                 showLabel = false,
+                movable = !state.settings.homeLocked,
                 modifier = Modifier.weight(1f),
             )
         }
@@ -797,6 +799,24 @@ private fun WidgetLayer(
             val held = controller.widgetDrag?.from?.cell == placement.cell
             val flashing = revealed && state.revealWidget == placement.cell
 
+            // A widget on a locked home screen is left to itself: it still
+            // plays its music or opens its app, but it cannot be picked up or
+            // stretched.
+            val gesture = if (state.settings.homeLocked) {
+                Modifier
+            } else {
+                Modifier.widgetGesture(
+                    placement = placement,
+                    controller = controller,
+                    coordinatesAt = { coordinates },
+                    boundsAt = { bounds },
+                    onSelect = { onSelect(it.cell) },
+                    onDragStart = onDragStart,
+                    onLongPress = onLongPress,
+                    onDrop = onDrop,
+                )
+            }
+
             Box(
                 modifier = Modifier
                     .offset(x = cellWidth * column, y = cellHeight * row)
@@ -809,16 +829,7 @@ private fun WidgetLayer(
                         coordinates = it
                         bounds = it.boundsInRoot()
                     }
-                    .widgetGesture(
-                        placement = placement,
-                        controller = controller,
-                        coordinatesAt = { coordinates },
-                        boundsAt = { bounds },
-                        onSelect = { onSelect(it.cell) },
-                        onDragStart = onDragStart,
-                        onLongPress = onLongPress,
-                        onDrop = onDrop,
-                    )
+                    .then(gesture)
                     .padding(WIDGET_MARGIN),
             ) {
                 AppWidgetView(
@@ -1020,6 +1031,7 @@ private fun HomeCell(
     onRevealShown: () -> Unit,
     modifier: Modifier = Modifier,
     showLabel: Boolean = state.settings.showLabels,
+    movable: Boolean = true,
 ) {
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
         // While something is in the air the grid shows itself, so it is obvious
@@ -1058,6 +1070,7 @@ private fun HomeCell(
                     labelColor = Color.White,
                     labelShadow = true,
                     badgeCount = badgeCount,
+                    movable = movable,
                 )
             }
 
@@ -1078,6 +1091,8 @@ private fun HomeCell(
                     showLabel = showLabel,
                     labelColor = Color.White,
                     labelShadow = true,
+                    movable = movable,
+                    opened = state.openFolder == folder.id,
                 )
             }
         }

@@ -9,7 +9,7 @@ default home app it takes over the home screen.
 ## Get it
 
 [**Download the latest APK**](https://github.com/suriya-ca/android-launcher/releases/latest)
-from GitHub Releases — the current release is **v0.2.2**.
+from GitHub Releases - the current release is **v0.3.2**.
 
 Install it, then make it the home app: **Settings → Apps → Default apps → Home
 app**, or use the launcher's own settings.

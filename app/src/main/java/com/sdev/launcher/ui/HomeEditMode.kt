@@ -185,6 +185,7 @@ internal fun PageOptions(
     isMainPage: Boolean,
     onSetMainPage: () -> Unit,
     onRemovePage: (Int) -> Unit,
+    onLock: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     var confirming by remember(page) { mutableStateOf(false) }
@@ -204,6 +205,10 @@ internal fun PageOptions(
                 onRemovePage(page)
                 onDismiss()
             }
+        },
+        onLock = {
+            onLock()
+            onDismiss()
         },
         onDismiss = onDismiss,
     )
@@ -391,6 +396,7 @@ private fun PageOptionsCard(
     canRemove: Boolean,
     onSetMain: () -> Unit,
     onRemove: () -> Unit,
+    onLock: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     OneUiPopup(anchor = anchor, onDismiss = onDismiss) {
@@ -409,5 +415,65 @@ private fun PageOptionsCard(
                 tint = MaterialTheme.colorScheme.error,
             )
         }
+        OneUiAction(
+            glyph = Glyph.LOCK,
+            label = stringResource(R.string.edit_lock_home),
+            onClick = onLock,
+        )
     }
+}
+
+/**
+ * What a long press says while the home screen is locked: why nothing can be
+ * moved, and the one way out of it.
+ *
+ * It is a card rather than a toast so that the way to the switch is part of the
+ * message. Nothing on the home screen can be edited until that switch is turned
+ * off, so the card is the only place the lock can be explained.
+ */
+@Composable
+internal fun LockedHint(onSettings: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center,
+        ) {
+            Glyph(
+                glyph = Glyph.LOCK,
+                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                size = 20.dp,
+            )
+        }
+
+        Spacer(Modifier.width(14.dp))
+
+        Column {
+            Text(
+                text = stringResource(R.string.home_locked_title),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = stringResource(R.string.home_locked_message),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+
+    Spacer(Modifier.height(2.dp))
+
+    OneUiAction(
+        glyph = Glyph.SETTINGS,
+        label = stringResource(R.string.home_locked_settings),
+        onClick = onSettings,
+    )
 }

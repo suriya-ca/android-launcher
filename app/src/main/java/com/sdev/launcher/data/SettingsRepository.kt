@@ -50,6 +50,7 @@ class SettingsRepository(context: Context) {
             homeRows = homeRowsOf(prefs),
             dockSlots = dockCount,
             showDock = prefs[KEY_SHOW_DOCK] ?: true,
+            homeLocked = prefs[KEY_HOME_LOCKED] ?: false,
             showNotificationBadges = prefs[KEY_SHOW_NOTIFICATION_BADGES] ?: true,
             enableT9Search = prefs[KEY_ENABLE_T9_SEARCH] ?: false,
             swipeDownNotifications = prefs[KEY_SWIPE_NOTIFICATIONS] ?: true,
@@ -85,6 +86,9 @@ class SettingsRepository(context: Context) {
         write { it[KEY_ICON_PACK] = packageName.orEmpty() }
 
     suspend fun setShowDock(enabled: Boolean) = write { it[KEY_SHOW_DOCK] = enabled }
+
+    /** Locks the home screen against rearrangement, or unlocks it. */
+    suspend fun setHomeLocked(locked: Boolean) = write { it[KEY_HOME_LOCKED] = locked }
 
     suspend fun setDockSlots(slots: Int) = write { prefs ->
         val validSlots = slots.coerceIn(
@@ -883,6 +887,7 @@ class SettingsRepository(context: Context) {
         val KEY_DOCK_ITEMS = stringPreferencesKey("dock_items")
         val KEY_DOCK_SLOTS = intPreferencesKey("dock_slots")
         val KEY_SHOW_DOCK = booleanPreferencesKey("show_dock")
+        val KEY_HOME_LOCKED = booleanPreferencesKey("home_locked")
         val KEY_SHOW_NOTIFICATION_BADGES = booleanPreferencesKey("show_notification_badges")
         val KEY_ENABLE_T9_SEARCH = booleanPreferencesKey("enable_t9_search")
     }

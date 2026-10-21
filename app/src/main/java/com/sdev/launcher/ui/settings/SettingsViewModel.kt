@@ -102,6 +102,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch { settingsRepository.setShowDock(show) }
     }
 
+    fun setHomeLocked(locked: Boolean) {
+        viewModelScope.launch { settingsRepository.setHomeLocked(locked) }
+    }
+
     fun setDockSlots(slots: Int) {
         viewModelScope.launch { settingsRepository.setDockSlots(slots) }
     }

@@ -90,6 +90,7 @@ enum class Glyph {
     THEME,
     CLOSE,
     RENAME,
+    LOCK,
 }
 
 /** The dim behind a card, which also swallows the taps that dismiss it. */
@@ -411,6 +412,31 @@ private fun DrawScope.drawGlyph(glyph: Glyph, tint: Color) {
             bar(0.24f, -0.24f, -0.16f, 0.16f)
             bar(-0.2f, 0.2f, -0.04f, 0.04f)
             bar(-0.26f, 0.26f, -0.18f, 0.18f)
+        }
+
+        Glyph.LOCK -> {
+            // A shackle over a body, with a keyhole in the middle.
+            drawArc(
+                color = tint,
+                startAngle = 180f,
+                sweepAngle = 180f,
+                useCenter = false,
+                topLeft = Offset(centre.x - side * 0.17f, centre.y - side * 0.34f),
+                size = Size(side * 0.34f, side * 0.38f),
+                style = Stroke(width = line * 0.9f, cap = StrokeCap.Round),
+            )
+            drawRoundRect(
+                color = tint,
+                topLeft = Offset(centre.x - side * 0.25f, centre.y - side * 0.04f),
+                size = Size(side * 0.5f, side * 0.38f),
+                cornerRadius = CornerRadius(side * 0.08f),
+                style = Stroke(width = line * 0.9f),
+            )
+            drawCircle(
+                color = tint,
+                radius = side * 0.045f,
+                center = Offset(centre.x, centre.y + side * 0.11f),
+            )
         }
     }
 }

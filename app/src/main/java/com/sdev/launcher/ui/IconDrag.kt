@@ -98,7 +98,7 @@ class IconGestureHandlers(
      * inside a folder opens the app, and a tap on the home screen behind the
      * folder puts the folder away.
      */
-    val onTap: (Dragged, DragArea) -> Unit,
+    val onTap: (Dragged, DragArea, Rect) -> Unit,
     /**
      * Long-pressed: the actions for this icon are wanted. [Rect] is where the
      * icon is, so the card that offers them can hang off it.
@@ -359,7 +359,8 @@ fun Modifier.iconGesture(
     coordinatesAt: () -> LayoutCoordinates?,
     boundsAt: () -> Rect,
     folderId: String? = null,
-): Modifier = pointerInput(dragged.key, area, index, folderId) {
+    movable: Boolean = true,
+): Modifier = pointerInput(dragged.key, area, index, folderId, movable) {
     // The fallback keeps an icon that has just been detached (and so cannot be
     // converted) from being dropped somewhere arbitrary.
     fun at(local: Offset): Offset =
@@ -381,11 +382,27 @@ fun Modifier.iconGesture(
                 .firstOrNull { it.id == down.id }
                 ?.pressed == false
 
-            if (released) handlers.onTap(dragged, area)
+            if (released) handlers.onTap(dragged, area, boundsAt())
             return@awaitEachGesture
         }
 
         longPress.consume()
+
+        // A locked home screen still answers a long press - with the card that
+        // explains the lock - but nothing is lifted. The rest of the press is
+        // swallowed so that the icon underneath does not treat it as a tap.
+        if (!movable) {
+            handlers.onLongPress(dragged, area, index, boundsAt())
+
+            while (true) {
+                val event = awaitPointerEvent()
+                val change = event.changes.firstOrNull { it.id == longPress.id } ?: break
+                change.consume()
+                if (!change.pressed) break
+            }
+            return@awaitEachGesture
+        }
+
         controller.start(dragged, area, index, at(longPress.position), folderId)
 
         // The actions are asked for as soon as the press is long enough, the way
@@ -565,6 +582,7 @@ fun DraggableIcon(
     labelShadow: Boolean = false,
     badgeCount: Int = 0,
     folderId: String? = null,
+    movable: Boolean = true,
 ) {
     // The icon's place, as a layout to convert through rather than as a rect
     // copied out of one: the page it sits on slides away under the finger
@@ -593,6 +611,7 @@ fun DraggableIcon(
                 coordinatesAt = { coordinates },
                 boundsAt = { bounds },
                 folderId = folderId,
+                movable = movable,
             ),
         iconSize = iconSize,
         showLabel = showLabel,

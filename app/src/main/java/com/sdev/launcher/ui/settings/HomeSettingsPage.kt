@@ -63,6 +63,15 @@ internal fun HomeSettingsPage(
             )
         }
 
+        SettingsSection(stringResource(R.string.settings_home_lock)) {
+            SettingsSwitchRow(
+                title = stringResource(R.string.settings_home_lock_title),
+                subtitle = stringResource(R.string.settings_home_lock_hint),
+                checked = settings.homeLocked,
+                onCheckedChange = viewModel::setHomeLocked,
+            )
+        }
+
         SettingsSection(stringResource(R.string.settings_dock)) {
             SettingsSwitchRow(
                 title = stringResource(R.string.settings_show_dock),
