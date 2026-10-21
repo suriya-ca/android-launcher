@@ -5,7 +5,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
@@ -322,11 +321,18 @@ fun Modifier.iconGesture(
         val longPress = awaitLongPressOrCancellation(down.id)
 
         if (longPress == null) {
-            val up = waitForUpOrCancellation()
-            if (up != null) {
-                up.consume()
-                handlers.onTap(app)
-            }
+            // The press ended before it was long enough to be a long press - or
+            // it was taken away from us. The up has already been read by the
+            // long-press watch, and every pointer event is only handed out once,
+            // so waiting for it again here would wait for the *next* gesture and
+            // no tap would ever be seen. The event left on the scope is what
+            // says which of the two happened: a let-go finger is the one that is
+            // no longer pressed.
+            val released = currentEvent.changes
+                .firstOrNull { it.id == down.id }
+                ?.pressed == false
+
+            if (released) handlers.onTap(app)
             return@awaitEachGesture
         }
 

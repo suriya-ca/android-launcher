@@ -2,7 +2,6 @@ package com.sdev.launcher.data
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -206,9 +205,6 @@ class WidgetPlacementTest {
         )
 
         assertEquals(setOf(0, 1, 4, 5), settings.widgetCells())
-        assertEquals(5, settings.widgetAt(0)?.hostId)
-        assertEquals(5, settings.widgetAt(5)?.hostId)
-        assertNull(settings.widgetAt(2))
     }
 
     @Test

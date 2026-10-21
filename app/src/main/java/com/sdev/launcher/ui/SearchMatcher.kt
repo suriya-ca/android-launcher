@@ -22,11 +22,18 @@ object SearchMatcher {
         '9' to charArrayOf('w', 'x', 'y', 'z'),
     )
 
-    fun matches(app: AppInfo, query: String, enableT9: Boolean = false): Boolean {
+    /** Whether [app]'s label matches [query]; the label is all that is looked at. */
+    fun matches(app: AppInfo, query: String, enableT9: Boolean = false): Boolean =
+        matches(app.label, query, enableT9)
+
+    /**
+     * Whether the label [label] matches [query]. This is the whole of the
+     * matching, separated from [AppInfo] so it can be checked without one.
+     */
+    fun matches(label: String, query: String, enableT9: Boolean = false): Boolean {
         val trimmed = query.trim()
         if (trimmed.isEmpty()) return true
 
-        val label = app.label
         // 1. Direct contains
         if (label.contains(trimmed, ignoreCase = true)) return true
 

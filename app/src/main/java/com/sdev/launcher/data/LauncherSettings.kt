@@ -149,12 +149,6 @@ data class LauncherSettings(
         return covered
     }
 
-    /** The widget covering [index], if one does. */
-    fun widgetAt(index: Int): WidgetPlacement? {
-        val shape = grid
-        return widgets[index] ?: widgets.values.firstOrNull { index in it.cellsIn(shape) }
-    }
-
     /**
      * True when a [spanX] by [spanY] widget anchored at [cell] would fit: on the
      * grid, clear of icons and clear of every other widget.

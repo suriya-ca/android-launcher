@@ -229,7 +229,6 @@ private fun DrawScope.drawGlyph(glyph: Glyph, tint: Color) {
     val side = size.minDimension
     val centre = Offset(size.width / 2f, size.height / 2f)
     val line = side * 0.1f
-    val round = Stroke(width = line, cap = StrokeCap.Round)
 
     fun bar(fromX: Float, fromY: Float, toX: Float, toY: Float) = drawLine(
         color = tint,

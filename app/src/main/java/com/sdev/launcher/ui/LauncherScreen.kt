@@ -610,9 +610,7 @@ fun LauncherScreen(
                     page = target.page,
                     pageCount = state.settings.homePages,
                     anchor = target.anchor,
-                    hasContent = state.settings.grid.cellsOfPage(target.page).any { cell ->
-                        cell in state.homeApps || cell in state.settings.widgetCells()
-                    },
+                    hasContent = !state.settings.isEmptyHomePage(target.page),
                     isMainPage = target.page == state.settings.mainHomePage,
                     onSetMainPage = { viewModel.setMainHomePage(target.page) },
                     onRemovePage = viewModel::removeHomePage,
