@@ -376,4 +376,76 @@ class HomeFoldersTest {
         assertEquals(listOf("app.b"), after.folders["f1"]?.appKeys)
         assertEquals(listOf("app.c", "app.a"), after.folders["f2"]?.appKeys)
     }
+
+    /**
+     * The maps a write is built in are the very maps a layout is made of, and
+     * an operation that did not change one of them hands it back untouched. So
+     * the result has to be copied out before the maps are cleared, or the write
+     * clears what it is about to put back.
+     */
+    @Test
+    fun `an app dropped on a folder keeps every other icon`() {
+        val home = mutableMapOf<Int, HomeItem>(
+            0 to HomeItem.Folder("f1"),
+            1 to HomeItem.App("app.b"),
+        )
+        val folders = mutableMapOf("f1" to Folder("f1", "", listOf("app.a")))
+
+        val layout = HomeLayout(home, folders)
+        val updated = layout
+            .withoutAppAt(AppPlace.Drawer, "app.c")
+            .withAppDroppedOnCell("app.c", cell = 0, newFolderId = "f2")
+
+        applyHomeLayout(home, folders, updated)
+
+        assertEquals(HomeItem.Folder("f1"), home[0])
+        assertEquals(HomeItem.App("app.b"), home[1])
+        assertEquals(listOf("app.a", "app.c"), folders["f1"]?.appKeys)
+    }
+
+    @Test
+    fun `an app dropped on an empty cell keeps the folders`() {
+        val home = mutableMapOf<Int, HomeItem>(0 to HomeItem.Folder("f1"))
+        val folders = mutableMapOf("f1" to Folder("f1", "", listOf("app.a")))
+
+        val layout = HomeLayout(home, folders)
+        val updated = layout
+            .withoutAppAt(AppPlace.Drawer, "app.c")
+            .withAppDroppedOnCell("app.c", cell = 5, newFolderId = "f2")
+
+        applyHomeLayout(home, folders, updated)
+
+        assertEquals(HomeItem.Folder("f1"), home[0])
+        assertEquals(HomeItem.App("app.c"), home[5])
+        assertEquals(setOf("f1"), folders.keys)
+    }
+
+    @Test
+    fun `an app put into an open folder keeps the rest of the screen`() {
+        val home = mutableMapOf<Int, HomeItem>(
+            0 to HomeItem.App("app.b"),
+            1 to HomeItem.Folder("f1"),
+        )
+        val folders = mutableMapOf("f1" to Folder("f1", "", listOf("app.a")))
+
+        val updated = HomeLayout(home, folders)
+            .withAppMovedIntoFolder("f1", "app.c")
+
+        applyHomeLayout(home, folders, updated)
+
+        assertEquals(HomeItem.App("app.b"), home[0])
+        assertEquals(HomeItem.Folder("f1"), home[1])
+        assertEquals(listOf("app.a", "app.c"), folders["f1"]?.appKeys)
+    }
+
+    @Test
+    fun `a change that did nothing leaves the screen as it was`() {
+        val home = mutableMapOf<Int, HomeItem>(0 to HomeItem.App("app.a"))
+        val folders = mutableMapOf("f1" to Folder("f1", "", listOf("app.b")))
+
+        applyHomeLayout(home, folders, HomeLayout(home, folders).withFolderNamed("missing", "x"))
+
+        assertEquals(mapOf(0 to HomeItem.App("app.a")), home)
+        assertEquals(setOf("f1"), folders.keys)
+    }
 }

@@ -112,12 +112,52 @@ class SettingsRepository(context: Context) {
         prefs[KEY_HIDDEN_APPS] = if (hidden) current + key else current - key
     }
 
-    suspend fun setHomeGrid(columns: Int, rows: Int): List<Int> = writeAndRelease { prefs ->
-        prefs[KEY_HOME_COLUMNS] = columns.coerceIn(4, 5)
-        prefs[KEY_HOME_ROWS] = rows.coerceIn(
-            LauncherSettings.HOME_MIN_ROWS,
-            LauncherSettings.HOME_MAX_ROWS,
-        )
+    suspend fun setHomeGrid(columns: Int, rows: Int): List<Int> {
+        val refitDropped = mutableListOf<Int>()
+
+        val released = writeAndRelease { prefs ->
+            val newColumns = columns.coerceIn(4, 5)
+            val newRows = rows.coerceIn(
+                LauncherSettings.HOME_MIN_ROWS,
+                LauncherSettings.HOME_MAX_ROWS,
+            )
+            val oldColumns = homeColumnsOf(prefs)
+            val oldRows = homeRowsOf(prefs)
+
+            if (newRows != oldRows || newColumns != oldColumns) {
+                // The cells are numbered on the grid in use, so they have to be
+                // renumbered before the new grid is written down. Writing it
+                // first would make the file look as if it had always been on
+                // the new grid, and the icons would jump across the pages.
+                val items = remapHomeCells(
+                    items = homeItemsOf(prefs),
+                    fromRows = oldRows,
+                    toRows = newRows,
+                    fromColumns = oldColumns,
+                    toColumns = newColumns,
+                )
+                prefs[KEY_HOME_ITEMS] = encodeHomeItems(items)
+                // A folder whose cell did not survive the change is not on the
+                // screen any more, and is not written down.
+                prefs[KEY_FOLDERS] = encodeFolders(liveFolders(foldersOf(prefs), items))
+
+                val refit = refitWidgets(
+                    widgets = widgetsOf(prefs),
+                    icons = items.keys,
+                    fromRows = oldRows,
+                    toRows = newRows,
+                    fromColumns = oldColumns,
+                    toColumns = newColumns,
+                )
+                prefs[KEY_WIDGETS] = encodeWidgets(refit.widgets)
+                refitDropped += refit.dropped
+            }
+
+            prefs[KEY_HOME_COLUMNS] = newColumns
+            prefs[KEY_HOME_ROWS] = newRows
+        }
+
+        return released + refitDropped
     }
 
     /** Says which page the launcher should open on and return to. */
@@ -160,10 +200,7 @@ class SettingsRepository(context: Context) {
                 .withoutAppAt(from, key)
                 .withAppDroppedOnCell(key, cell, newFolderId())
 
-            home.clear()
-            home.putAll(updated.cells)
-            folders.clear()
-            folders.putAll(updated.folders)
+            applyHomeLayout(home, folders, updated)
             landed = cell
         }
 
@@ -204,10 +241,7 @@ class SettingsRepository(context: Context) {
             val layout = HomeLayout(home, folders)
             val cleared = layout.withoutAppAt(from, key)
 
-            home.clear()
-            home.putAll(cleared.cells)
-            folders.clear()
-            folders.putAll(cleared.folders)
+            applyHomeLayout(home, folders, cleared)
             dock[target] = key
             landed = target
         }
@@ -231,10 +265,7 @@ class SettingsRepository(context: Context) {
             if (layout.cellOfFolder(folderId) == null) return@mutateSlots
 
             val updated = layout.withFolderDroppedOnCell(folderId, cell)
-            home.clear()
-            home.putAll(updated.cells)
-            folders.clear()
-            folders.putAll(updated.folders)
+            applyHomeLayout(home, folders, updated)
             landed = cell
         }
 
@@ -248,20 +279,14 @@ class SettingsRepository(context: Context) {
     suspend fun moveFolderApp(folderId: String, from: Int, to: Int) =
         mutateSlots { _, _, home, folders, _, _ ->
             val updated = HomeLayout(home, folders).withFolderMemberMoved(folderId, from, to)
-            home.clear()
-            home.putAll(updated.cells)
-            folders.clear()
-            folders.putAll(updated.folders)
+            applyHomeLayout(home, folders, updated)
         }
 
     /** Calls the folder [folderId] [name]. */
     suspend fun renameFolder(folderId: String, name: String) =
         mutateSlots { _, _, home, folders, _, _ ->
             val updated = HomeLayout(home, folders).withFolderNamed(folderId, name)
-            home.clear()
-            home.putAll(updated.cells)
-            folders.clear()
-            folders.putAll(updated.folders)
+            applyHomeLayout(home, folders, updated)
         }
 
     /**
@@ -271,10 +296,7 @@ class SettingsRepository(context: Context) {
     suspend fun removeFolder(folderId: String) =
         mutateSlots { _, _, home, folders, _, _ ->
             val updated = HomeLayout(home, folders).withoutFolder(folderId)
-            home.clear()
-            home.putAll(updated.cells)
-            folders.clear()
-            folders.putAll(updated.folders)
+            applyHomeLayout(home, folders, updated)
         }
 
     /**
@@ -294,10 +316,7 @@ class SettingsRepository(context: Context) {
 
             val moved = layout.withAppMovedIntoFolder(folderId, key)
 
-            home.clear()
-            home.putAll(moved.cells)
-            folders.clear()
-            folders.putAll(moved.folders)
+            applyHomeLayout(home, folders, moved)
         }
 
     /**
@@ -322,10 +341,7 @@ class SettingsRepository(context: Context) {
             val cell = findFreeCell(occupied.toSet(), grid.capacity, near)
 
             val updated = if (cell == null) cleared else cleared.withAppAt(key, cell)
-            home.clear()
-            home.putAll(updated.cells)
-            folders.clear()
-            folders.putAll(updated.folders)
+            applyHomeLayout(home, folders, updated)
             landed = cell
         }
 
@@ -343,10 +359,7 @@ class SettingsRepository(context: Context) {
             if (key !in folder.appKeys) return@mutateSlots
 
             val cleared = layout.withoutAppInFolder(folderId, key)
-            home.clear()
-            home.putAll(cleared.cells)
-            folders.clear()
-            folders.putAll(cleared.folders)
+            applyHomeLayout(home, folders, cleared)
         }
 
     /** Empties one home screen cell. */

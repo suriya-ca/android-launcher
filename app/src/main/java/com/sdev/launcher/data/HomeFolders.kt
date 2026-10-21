@@ -281,6 +281,30 @@ fun HomeLayout.withFolderDroppedOnCell(folderId: String, cell: Int): HomeLayout 
 }
 
 /**
+ * Puts [updated] into the maps a caller is building its result in.
+ *
+ * The maps are copied out first, and that is not a detail: an operation that
+ * did not change one of them hands that one back as it was given, so
+ * [HomeLayout.cells] can be the very map [home] is, and [HomeLayout.folders]
+ * the very map [folders] is. Clearing before reading would empty the result
+ * with it - which is what used to happen when an app was dropped on a folder,
+ * taking every icon on the home screen with it.
+ */
+fun applyHomeLayout(
+    home: MutableMap<Int, HomeItem>,
+    folders: MutableMap<String, Folder>,
+    updated: HomeLayout,
+) {
+    val cells = updated.cells.toMap()
+    val folderMap = updated.folders.toMap()
+
+    home.clear()
+    home.putAll(cells)
+    folders.clear()
+    folders.putAll(folderMap)
+}
+
+/**
  * How a home screen is written down.
  *
  * The cells are written as `index=key` lines, as they always were, and a folder
