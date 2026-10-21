@@ -33,6 +33,13 @@
     <string name="cancel">Cancel</string>
     <string name="close">Close</string>
 
+    <string name="folder_default_name">Folder</string>
+    <string name="folder_rename">Rename folder</string>
+    <string name="folder_rename_confirm">Rename</string>
+    <string name="folder_remove">Remove folder</string>
+    <string name="folder_remove_from_folder">Remove from folder</string>
+    <string name="folder_home_only">Folders stay on the home screen</string>
+
     <string name="home_full">The home screen is full</string>
     <string name="widget_picker_title">Widgets</string>
     <string name="widget_picker_empty">No widgets are available</string>

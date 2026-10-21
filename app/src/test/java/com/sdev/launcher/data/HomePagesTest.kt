@@ -92,7 +92,10 @@ class HomePagesTest {
     @Test
     fun `an icon counts on its own page and no other`() {
         val perPage = grid.cellCount
-        val settings = LauncherSettings(homeItems = mapOf(perPage + 3 to "app.a"), homePages = 3)
+        val settings = LauncherSettings(
+            homeItems = mapOf(perPage + 3 to HomeItem.App("app.a")),
+            homePages = 3,
+        )
 
         assertEquals(true, settings.isEmptyHomePage(0))
         assertEquals(false, settings.isEmptyHomePage(1))
@@ -116,7 +119,7 @@ class HomePagesTest {
     @Test
     fun `an app is only ever in one place`() {
         val settings = LauncherSettings(
-            homeItems = mapOf(4 to "app.a"),
+            homeItems = mapOf(4 to HomeItem.App("app.a")),
             dockItems = mapOf(0 to "app.b"),
         )
 

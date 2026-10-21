@@ -20,6 +20,8 @@ app**, or use the launcher's own settings.
 - App grid with an editable number of rows per page
 - Multiple pages, with add / remove and a main home page
 - A dock
+- Folders: drop one app onto another to make a folder, tap it to open it, and
+  carry the apps in and out of it
 - Drag and drop that lands where you let go — every cell of every page, and the
   dock, for apps and widgets alike
 - Widget hosting, including resize and move

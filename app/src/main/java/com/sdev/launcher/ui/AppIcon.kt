@@ -55,7 +55,7 @@ fun AppIconTileContent(
             Text(
                 text = app.label,
                 style = MaterialTheme.typography.labelMedium.copy(
-                    shadow = if (labelShadow) LABEL_SHADOW else null,
+                    shadow = if (labelShadow) LabelShadow else null,
                 ),
                 color = labelColor ?: MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
@@ -67,7 +67,7 @@ fun AppIconTileContent(
 }
 
 /** Home screen labels sit on the wallpaper, so they need a little help. */
-private val LABEL_SHADOW = Shadow(color = Color.Black.copy(alpha = 0.7f), blurRadius = 6f)
+internal val LabelShadow = Shadow(color = Color.Black.copy(alpha = 0.7f), blurRadius = 6f)
 
 /**
  * The icon itself, falling back to a coloured letter while the real bitmap is
